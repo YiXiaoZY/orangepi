@@ -1,0 +1,7 @@
+# PC 推理服务额外依赖
+fastapi>=0.100
+uvicorn[standard]>=0.23
+python-multipart>=0.0.6
+
+# 香橙派客户端额外依赖
+requests>=2.28

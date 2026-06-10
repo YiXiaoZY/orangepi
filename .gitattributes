@@ -1,0 +1,2 @@
+*.pt filter=lfs diff=lfs merge=lfs -text
+models/20180402-114759-vggface2.pt filter=lfs diff=lfs merge=lfs -text

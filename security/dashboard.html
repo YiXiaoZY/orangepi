@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>设备状态 · TE Security</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --card: #121a24;
+      --border: #1e2d3d;
+      --text: #e8eef4;
+      --muted: #8aa0b5;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --bad: #ef4444;
+      --accent: #3b82f6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: radial-gradient(ellipse at top, #152238 0%, var(--bg) 55%);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+      flex-wrap: wrap;
+      gap: 12px;
+    }
+    h1 { font-size: 1.5rem; font-weight: 600; }
+    .sub { color: var(--muted); font-size: 0.85rem; margin-top: 4px; }
+    .pill {
+      padding: 6px 14px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      border: 1px solid var(--border);
+      background: var(--card);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px 20px;
+      box-shadow: 0 8px 32px rgba(0,0,0,.25);
+    }
+    .card.wide { grid-column: 1 / -1; }
+    .card h2 {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 12px;
+    }
+    .status-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 1.1rem;
+      font-weight: 600;
+    }
+    .dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      flex-shrink: 0;
+      box-shadow: 0 0 12px currentColor;
+    }
+    .dot.ok { background: var(--ok); color: var(--ok); }
+    .dot.warn { background: var(--warn); color: var(--warn); }
+    .dot.bad { background: var(--bad); color: var(--bad); }
+    .meta { margin-top: 10px; font-size: 0.82rem; color: var(--muted); line-height: 1.6; }
+    .tags { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .tag {
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.78rem;
+      background: #1a2836;
+      border: 1px solid var(--border);
+    }
+    .tag.known { border-color: #166534; color: #86efac; }
+    .tag.stranger { border-color: #7f1d1d; color: #fca5a5; }
+    .stat-row {
+      display: flex;
+      gap: 32px;
+      flex-wrap: wrap;
+      margin-top: 8px;
+    }
+    .stat-item .num {
+      font-size: 1.6rem;
+      font-weight: 700;
+      color: var(--accent);
+    }
+    .stat-item .lbl { font-size: 0.78rem; color: var(--muted); margin-top: 2px; }
+    footer { margin-top: 28px; text-align: center; color: var(--muted); font-size: 0.75rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>门禁设备状态</h1>
+      <div class="sub">仅状态监控 · 无视频画面</div>
+    </div>
+    <div class="pill" id="clock">--</div>
+  </header>
+
+  <div class="grid">
+    <div class="card">
+      <h2>推理服务</h2>
+      <div class="status-row"><span class="dot ok" id="srv-dot"></span><span id="srv-text">--</span></div>
+      <div class="meta" id="srv-meta"></div>
+    </div>
+    <div class="card">
+      <h2>香橙派</h2>
+      <div class="status-row"><span class="dot bad" id="cli-dot"></span><span id="cli-text">离线</span></div>
+      <div class="meta" id="cli-meta"></div>
+    </div>
+    <div class="card">
+      <h2>摄像头</h2>
+      <div class="status-row"><span class="dot bad" id="cam-dot"></span><span id="cam-text">未知</span></div>
+      <div class="meta" id="cam-meta"></div>
+    </div>
+    <div class="card">
+      <h2>串口门禁</h2>
+      <div class="status-row"><span class="dot bad" id="ser-dot"></span><span id="ser-text">未知</span></div>
+      <div class="meta" id="ser-meta"></div>
+    </div>
+    <div class="card wide">
+      <h2>识别状态</h2>
+      <div class="stat-row">
+        <div class="stat-item">
+          <div class="num" id="infer-ms">--</div>
+          <div class="lbl">推理耗时 (ms)</div>
+        </div>
+        <div class="stat-item">
+          <div class="num" id="infer-frames">--</div>
+          <div class="lbl">累计帧数</div>
+        </div>
+        <div class="stat-item">
+          <div class="num" id="infer-count">--</div>
+          <div class="lbl">当前检测人数</div>
+        </div>
+      </div>
+      <div class="meta" id="infer-meta" style="margin-top:14px"></div>
+      <div class="tags" id="person-tags"></div>
+    </div>
+  </div>
+
+  <footer>自动刷新 2s · <span id="refresh-info"></span></footer>
+
+  <script>
+    function setDot(el, state) {
+      el.className = "dot " + (state === true ? "ok" : state === "warn" ? "warn" : "bad");
+    }
+    function fmtUptime(sec) {
+      const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+      if (h) return `${h}h ${m}m`;
+      if (m) return `${m}m ${s}s`;
+      return `${s}s`;
+    }
+    async function refresh() {
+      try {
+        const r = await fetch("/api/status");
+        const d = await r.json();
+        const db = d.database || {};
+
+        setDot(document.getElementById("srv-dot"), d.inference.active ? "ok" : "warn");
+        document.getElementById("srv-text").textContent = d.inference.active ? "运行中" : "待机";
+        document.getElementById("srv-meta").innerHTML =
+          `运行 ${fmtUptime(d.server.uptime_sec)}<br>` +
+          `人脸库 ${db.persons||0} 人 · ${db.embeddings||0} 条特征`;
+
+        const cli = d.client;
+        setDot(document.getElementById("cli-dot"), cli.online);
+        document.getElementById("cli-text").textContent = cli.online ? "在线" : "离线";
+        document.getElementById("cli-meta").innerHTML = cli.online
+          ? `${cli.hostname || "orangepi"}<br>显示 ${cli.display_fps.toFixed(0)} FPS · 推理 ${cli.infer_fps.toFixed(0)} FPS`
+          : "未收到心跳";
+
+        setDot(document.getElementById("cam-dot"), cli.online && cli.camera_ok);
+        document.getElementById("cam-text").textContent =
+          !cli.online ? "未知" : cli.camera_ok ? "正常" : "无信号";
+        document.getElementById("cam-meta").textContent =
+          cli.camera_resolution ? `${cli.camera_resolution}` : "--";
+
+        const serOk = cli.online && cli.serial_ok;
+        setDot(document.getElementById("ser-dot"), serOk ? (cli.serial_state === "open" ? "ok" : "warn") : "bad");
+        document.getElementById("ser-text").textContent =
+          !cli.online ? "未知" : !cli.serial_ok ? "未连接" : (cli.serial_state === "open" ? "开门" : "关门");
+        document.getElementById("ser-meta").innerHTML =
+          cli.serial_device
+            ? `${cli.serial_device.split("/").pop()}<br>指令: ${cli.serial_last_cmd || "--"}`
+            : "--";
+
+        document.getElementById("infer-ms").textContent = d.inference.last_ms || "--";
+        document.getElementById("infer-frames").textContent = d.inference.total_frames || 0;
+        document.getElementById("infer-count").textContent = d.inference.persons || 0;
+        document.getElementById("infer-meta").textContent =
+          `已知 ${(d.inference.known||[]).length} 人 · 陌生人 ${(d.inference.strangers||[]).length} 人`;
+
+        const tags = document.getElementById("person-tags");
+        tags.innerHTML = "";
+        (d.inference.known || []).forEach(p => {
+          const t = document.createElement("span");
+          t.className = "tag known"; t.textContent = p.label; tags.appendChild(t);
+        });
+        (d.inference.strangers || []).forEach(() => {
+          const t = document.createElement("span");
+          t.className = "tag stranger"; t.textContent = "陌生人"; tags.appendChild(t);
+        });
+
+        document.getElementById("refresh-info").textContent = new Date().toLocaleTimeString();
+      } catch (e) {
+        document.getElementById("refresh-info").textContent = "连接失败";
+      }
+      document.getElementById("clock").textContent = new Date().toLocaleString("zh-CN");
+    }
+    refresh();
+    setInterval(refresh, 2000);
+  </script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# 香橙派 5 (ARM64 Linux) 安防项目 Python 依赖
+# 建议先: sudo apt install python3-opencv python3-pip
+# 再: pip3 install -r requirements-orangepi.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+numpy>=1.23,<3
+ultralytics>=8.0
+mediapipe>=0.10.9
+facenet-pytorch>=2.5.0
+Pillow>=9.0
+lap>=0.5.12
+
+# PyTorch CPU 版（ARM64）— 若 pip 失败，见 DEPLOY_ORANGEPI5.md 单独安装
+torch>=2.0
+torchvision>=0.15

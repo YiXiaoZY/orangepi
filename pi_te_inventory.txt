@@ -1,0 +1,6993 @@
+﻿TOTAL_FILES=79
+
+============================================================
+FILE: DEPLOY_ORANGEPI5.md (6259 chars)
+============================================================
+# 香橙派 5 部署清单（安防项目）
+
+
+
+适用于：Orange Pi 5 + USB 摄像头 + 本项目 `security/` 模块。
+
+
+
+---
+
+
+
+## 一、硬件与系统
+
+
+
+| 项目 | 建议 |
+
+|------|------|
+
+| 板子 | Orange Pi 5 (RK3588) |
+
+| 系统 | Orange Pi OS / Debian / Ubuntu（64 位） |
+
+| 摄像头 | USB UVC 摄像头（已验证 `/dev/video0`） |
+
+| 存储 | 建议 32GB+，模型与依赖约 2~5GB |
+
+| 网络 | 首次需联网下载模型 |
+
+
+
+---
+
+
+
+## 二、拷贝项目到板子
+
+
+
+在 PC 上打包（或在板子 `git clone`）：
+
+
+
+```bash
+
+# 至少需要这些目录/文件
+
+te/
+
+├── security/              # 安防核心
+
+├── data/face_db/          # 人脸库照片（按姓名分子目录）
+
+├── models/                # 可空，首次运行自动下载
+
+├── test_usb_camera.py     # USB 测试
+
+├── usb_camera.py          # 相机预览/拍照
+
+├── install_orangepi.sh
+
+├── requirements-orangepi.txt
+
+└── DEPLOY_ORANGEPI5.md
+
+```
+
+
+
+拷到板子示例路径：`/home/orangepi/te`
+
+
+
+---
+
+
+
+## 三、系统依赖（apt）
+
+
+
+```bash
+
+sudo apt update
+
+sudo apt install -y \
+
+    python3 \
+
+    python3-pip \
+
+    python3-venv \
+
+    python3-opencv \
+
+    libgl1 \
+
+    libglib2.0-0 \
+
+    git
+
+
+
+# v4l-utils 单独装（香橙派镜像常 apt hold，勿与上面同批）
+
+command -v v4l2-ctl >/dev/null || sudo apt install -y v4l-utils
+
+```
+
+
+
+| 包 | 作用 |
+
+|----|------|
+
+| `python3-opencv` | OpenCV（`cv2`），与系统 Python 绑定 |
+
+| `v4l-utils` | `v4l2-ctl` 查看摄像头 |
+
+| `libgl1` | OpenCV 显示窗口（无头可省略） |
+
+
+
+---
+
+
+
+## 四、USB 摄像头权限
+
+
+
+```bash
+
+ls -l /dev/video*          # 确认有 video0
+
+sudo usermod -aG video orangepi
+
+# 注销重新登录，或 reboot
+
+groups | grep video
+
+```
+
+
+
+---
+
+
+
+## 五、一键安装 Python 依赖
+
+
+
+**不要**把 `install_orangepi.sh` 里的 `echo "=== 3..."` 等片段复制到终端。交互式 shell 里 `$0` 是 `bash`，`PROJECT_DIR` 会变成 `/usr/bin`，出现 `Permission denied: '/usr/bin/venv'`。
+
+
+
+**只执行整文件**，或下面「仅 venv」三条命令：
+
+
+
+```bash
+
+cd ~/test/te
+
+bash setup_venv.sh
+
+```
+
+
+
+完整依赖安装：
+
+
+
+```bash
+
+cd ~/test/te
+
+chmod +x install_orangepi.sh
+
+./install_orangepi.sh
+
+```
+
+
+
+或手动安装（先 `cd` 到项目根目录）：
+
+
+
+```bash
+
+cd ~/test/te
+
+python3 -m venv venv
+
+source venv/bin/activate
+
+
+
+pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+
+
+# PyTorch ARM64 CPU
+
+pip install torch torchvision \
+
+    --index-url https://download.pytorch.org/whl/cpu
+
+
+
+pip install -r requirements-orangepi.txt \
+
+    -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+```
+
+
+
+### 验证依赖
+
+
+
+```bash
+
+python3 -c "import cv2; print(cv2.__version__)"
+
+python3 -c "import torch; print(torch.__version__)"
+
+python3 -c "from ultralytics import YOLO; print('YOLO OK')"
+
+python3 -c "import mediapipe; print(mediapipe.__version__)"
+
+```
+
+
+
+---
+
+
+
+## 六、USB 摄像头测试（已通过可跳过）
+
+
+
+```bash
+
+python3 test_usb_camera.py --list-only
+
+python3 test_usb_camera.py --device 0
+
+# 查看 outputs/usb_camera_test_0.jpg
+
+
+
+python3 usb_camera.py --device 0 --width 640 --height 480
+
+# 按 q 退出
+
+```
+
+
+
+---
+
+
+
+## 七、注册人脸库
+
+
+
+目录结构：
+
+
+
+```
+
+data/face_db/
+
+├── 张三/
+
+│   ├── 1.jpg
+
+│   └── 2.jpg
+
+└── 李四/
+
+    └── 1.jpg
+
+```
+
+
+
+每人 2~5 张正脸，光线均匀。
+
+
+
+```bash
+
+cd /home/orangepi/te
+
+python3 -m security.enroll
+
+```
+
+
+
+成功后会生成 `data/security.db`。
+
+
+
+---
+
+
+
+## 八、预下载模型（首次必做）
+
+
+
+`run_security` 首次会拉取 YOLO / MediaPipe / FaceNet，香橙派访问 GitHub/Google 易报：
+
+
+
+`Remote end closed connection without response`
+
+
+
+**先单独下载（可多试几次）：**
+
+
+
+```bash
+
+cd ~/test/te
+
+source venv/bin/activate
+
+python3 -m security.download_models
+
+```
+
+
+
+确认存在：
+
+
+
+```bash
+
+ls -lh models/yolov8n.pt models/blaze_face_short_range.tflite
+
+ls ~/.cache/torch/checkpoints/
+
+```
+
+
+
+**PC 下载后 scp 到板子（离线推荐）：**
+
+
+
+| 文件 | 目标 |
+
+|------|------|
+
+| `yolov8n.pt` | `项目/models/yolov8n.pt` |
+
+| `blaze_face_short_range.tflite` | `项目/models/` |
+
+| **`20180402-114759-vggface2.pt`**（约 107MB，**必拷**） | `项目/models/20180402-114759-vggface2.pt` |
+
+
+
+FaceNet 下载地址（PC 浏览器）:
+
+https://github.com/timesler/facenet-pytorch/releases/download/v2.2.9/20180402-114759-vggface2.pt
+
+
+
+```bash
+
+scp 20180402-114759-vggface2.pt orangepi@orangepi5:~/Downloads/te/models/
+
+```
+
+
+
+或拷贝 `~/.cache/torch/checkpoints/` 整个目录到板子用户主目录下同名路径。
+
+
+
+## 九、启动安防（USB 摄像头）
+
+
+
+```bash
+
+cd ~/test/te
+
+python3 -m security.run_security --camera --device 0
+
+```
+
+
+
+| 参数 | 说明 |
+
+|------|------|
+
+| `--camera` | 使用 USB 摄像头 |
+
+| `--device 0` | 对应 `/dev/video0` |
+
+| `--no-show` | 无显示器时不弹窗（需后续支持保存/日志） |
+
+
+
+首次运行会自动下载：
+
+
+
+- `yolov8n.pt`
+
+- `models/blaze_face_short_range.tflite`
+
+
+
+---
+
+
+
+## 十、性能建议（香橙派）
+
+
+
+| 项 | 建议 |
+
+|----|------|
+
+| 分辨率 | 摄像头 `640x480`，勿用 1080p |
+
+| YOLO | 仅用 `yolov8n.pt`（最小） |
+
+| 人脸比对间隔 | `security/config.py` 中 `FACE_DETECT_INTERVAL = 5` 可改为 `10` |
+
+| 无桌面 | 使用 SSH，加 `--no-show` |
+
+
+
+预期：USB 采集约 10 FPS；YOLO+人脸后整体可能 3~8 FPS，属正常。
+
+
+
+---
+
+
+
+## 十一、开机自启（可选）
+
+
+
+创建 systemd 服务 `/etc/systemd/system/te-security.service`：
+
+
+
+```ini
+
+[Unit]
+
+Description=TE Security Camera
+
+After=network.target
+
+
+
+[Service]
+
+Type=simple
+
+User=orangepi
+
+WorkingDirectory=/home/orangepi/te
+
+Environment=OPENCV_VIDEOIO_PRIORITY_LIST=V4L2
+
+ExecStart=/home/orangepi/te/venv/bin/python3 -m security.run_security --camera --device 0 --no-show
+
+Restart=on-failure
+
+RestartSec=5
+
+
+
+[Install]
+
+WantedBy=multi-user.target
+
+```
+
+
+
+```bash
+
+sudo systemctl daemon-reload
+
+sudo systemctl enable te-security
+
+sudo systemctl start te-security
+
+sudo systemctl status te-security
+
+journalctl -u te-security -f
+
+```
+
+
+
+---
+
+
+
+## 十二、常见问题
+
+
+
+| 现象 | 处理 |
+
+|------|------|
+
+| `Remote end closed connection without response` | 先 `python3 -m security.download_models` 或从 PC scp 模型到 `models/` |
+
+| `Permission denied: '/usr/bin/venv'` | 勿逐段粘贴脚本；`cd ~/test/te` 后执行 `./install_orangepi.sh` 或手动 `python3 -m venv venv` |
+
+| `Held packages were changed` | 去掉 `v4l-utils` 后重装；或 `sudo apt install -y --allow-change-held-packages v4l-utils` |
+
+| `No module named 'cv2'` | `sudo apt install python3-opencv` |
+
+| 打不开 `/dev/video0` | 检查 `video` 组、`lsusb`、换 USB 口 |
+
+| `/dev/video1` 警告 | 正常，只用 `video0` |
+
+| PyTorch 安装失败 | 用 `install_orangepi.sh` 或换清华源 |
+
+| MediaPipe 安装失败 | `pip install mediapipe -i https://pypi.tuna.tsinghua.edu.cn/simple` |
+
+| 运行很慢 | 降分辨率、增大 `FACE_DETECT_INTERVAL` |
+
+| 内存不足 | 关闭桌面，只用 `yolov8n` |
+
+
+
+---
+
+
+
+## 十三、部署检查表（打勾）
+
+
+
+- [ ] 项目已拷贝到 `/home/orangepi/te`
+
+- [ ] `apt` 系统依赖已安装
+
+- [ ] 用户已在 `video` 组
+
+- [ ] `test_usb_camera.py` 通过
+
+- [ ] `pip` 依赖验证通过
+
+- [ ] `data/face_db/` 已放人脸照片
+
+- [ ] `security.enroll` 成功
+
+- [ ] `security.download_models` 成功（或已从 PC 拷贝模型）
+
+- [ ] `run_security --camera` 能跑
+
+- [ ] （可选）systemd 自启配置
+
+
+
+---
+
+
+
+## 十四、与 PC 开发环境差异
+
+
+
+| PC (Windows) | 香橙派 5 |
+
+|--------------|----------|
+
+| CUDA 可选 | 一般 CPU 推理 |
+
+| OpenCV 4.13 | apt 可能 4.5.x，够用 |
+
+| 高 FPS | 3~10 FPS，需降负载 |
+
+
+
+开发在 PC，部署在香橙派时，只需同步代码 + `data/face_db/`，不必拷贝 PC 的 `venv`。
+
+
+BINARY: data/face_db/admin/alert_stranger_id1_20260531_210421.jpg (95744 bytes)
+BINARY: data/face_db/admin/alert_stranger_id1_20260531_210451.jpg (93819 bytes)
+BINARY: data/face_db/admin/alert_stranger_id1_20260531_211956.jpg (93090 bytes)
+BINARY: data/face_db/admin/alert_stranger_id1_20260531_212037.jpg (101339 bytes)
+BINARY: data/face_db/admin/alert_stranger_id1_20260531_212107.jpg (99242 bytes)
+BINARY: data/face_db/admin/alert_stranger_id1_20260531_212150.jpg (102502 bytes)
+BINARY: data/security.db (73728 bytes)
+BINARY: data/videos/person-detection.mp4 (6031199 bytes)
+BINARY: images/sample_lena.jpg (91814 bytes)
+
+============================================================
+FILE: install_orangepi.sh (2467 chars)
+============================================================
+#!/bin/bash
+
+# 香橙派 5 安防项目 — 系统依赖一键安装（在板子上执行）
+
+# 用法（必须在项目目录执行，不要逐段复制到终端）:
+
+#   cd ~/test/te && chmod +x install_orangepi.sh && ./install_orangepi.sh
+
+
+
+set -e
+
+
+
+# 脚本所在目录；交互式粘贴时 $0 是 bash，会误指向 /usr/bin
+
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+
+    PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+else
+
+    PROJECT_DIR="$(pwd)"
+
+fi
+
+if [ ! -f "$PROJECT_DIR/requirements-orangepi.txt" ]; then
+
+    echo "错误: 未在项目根目录找到 requirements-orangepi.txt"
+
+    echo "请先: cd ~/test/te   再执行 ./install_orangepi.sh"
+
+    exit 1
+
+fi
+
+
+
+echo "=== 1. 系统包 ==="
+
+sudo apt update
+
+# 勿与 v4l-utils 同批安装：香橙派镜像常 hold 该包，会导致整批失败
+
+sudo apt install -y \
+
+    python3 python3-pip python3-venv \
+
+    python3-opencv \
+
+    libgl1 libglib2.0-0 \
+
+    git
+
+
+
+if command -v v4l2-ctl >/dev/null 2>&1; then
+
+    echo "v4l-utils 已可用，跳过"
+
+else
+
+    echo "尝试安装 v4l-utils（可选，失败可忽略）..."
+
+    sudo apt install -y v4l-utils 2>/dev/null || \
+
+        echo "提示: v4l-utils 被 hold，已有 v4l2-ctl 则无需处理"
+
+fi
+
+
+
+echo "=== 2. 用户加入 video 组（USB 摄像头权限）==="
+
+sudo usermod -aG video "$USER" 2>/dev/null || true
+
+echo "若首次加入 video 组，请注销后重新登录"
+
+
+
+echo "=== 3. Python 虚拟环境（项目目录: $PROJECT_DIR）==="
+
+bash "$PROJECT_DIR/setup_venv.sh"
+
+# shellcheck disable=SC1091
+
+source "$PROJECT_DIR/venv/bin/activate"
+
+VENV="$PROJECT_DIR/venv"
+
+
+
+echo "=== 4. 升级 pip ==="
+
+pip install --upgrade pip -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+
+
+echo "=== 5. PyTorch (CPU / ARM64) ==="
+
+pip install torch torchvision \
+
+    --index-url https://download.pytorch.org/whl/cpu \
+
+    -i https://pypi.tuna.tsinghua.edu.cn/simple || {
+
+    echo "PyTorch 官方源失败，尝试清华镜像..."
+
+    pip install torch torchvision -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+}
+
+
+
+echo "=== 6. 项目依赖 ==="
+
+pip install -r "$PROJECT_DIR/requirements-orangepi.txt" \
+
+    -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+
+
+echo "=== 7. 验证 ==="
+
+python3 -c "import cv2; print('OpenCV', cv2.__version__)"
+
+python3 -c "import torch; print('PyTorch', torch.__version__)"
+
+python3 -c "import ultralytics; print('Ultralytics OK')"
+
+python3 -c "import mediapipe; print('MediaPipe', mediapipe.__version__)"
+
+
+
+echo ""
+
+echo "=== 完成 ==="
+
+echo "测试 USB:  python3 test_usb_camera.py --list-only"
+
+echo "预览相机:  python3 usb_camera.py"
+
+echo "下载模型:  python3 -m security.download_models"
+
+echo "注册人脸:  python3 -m security.enroll"
+
+echo "启动安防:  python3 -m security.run_security --camera --device 0"
+
+echo ""
+
+echo "若使用 venv，以后先执行: source $VENV/bin/activate"
+
+
+BINARY: models/20180402-114759-vggface2.pt (111898327 bytes)
+BINARY: models/blaze_face_short_range.tflite (229746 bytes)
+BINARY: models/hand_landmarker.task (7819105 bytes)
+BINARY: models/yolov8n.pt (6549796 bytes)
+BINARY: outputs/alerts/alert_stranger_id12_20260604_174934.jpg (89464 bytes)
+BINARY: outputs/alerts/alert_stranger_id15_20260607_142021.jpg (68698 bytes)
+BINARY: outputs/alerts/alert_stranger_id17_20260604_174936.jpg (80363 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260604_174907.jpg (99633 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260604_174937.jpg (72441 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260604_190805.jpg (92097 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260604_193404.jpg (135531 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260604_193436.jpg (134901 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260604_194024.jpg (130410 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260605_004027.jpg (80373 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260605_004103.jpg (82938 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260607_141001.jpg (74256 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260607_142143.jpg (81009 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260607_142611.jpg (95744 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260607_142644.jpg (82769 bytes)
+BINARY: outputs/alerts/alert_stranger_id1_20260607_142727.jpg (104935 bytes)
+BINARY: outputs/alerts/alert_stranger_id21_20260604_174936.jpg (84597 bytes)
+BINARY: outputs/alerts/alert_stranger_id2_20260605_004323.jpg (104875 bytes)
+BINARY: outputs/alerts/alert_stranger_id2_20260607_141847.jpg (93657 bytes)
+BINARY: outputs/alerts/alert_stranger_id3_20260607_141018.jpg (86961 bytes)
+BINARY: outputs/alerts/alert_stranger_id4_20260604_174931.jpg (87897 bytes)
+BINARY: outputs/alerts/alert_stranger_id5_20260607_142200.jpg (90788 bytes)
+BINARY: outputs/alerts/alert_stranger_id6_20260607_140406.jpg (85253 bytes)
+BINARY: outputs/alerts/alert_stranger_id7_20260607_142005.jpg (79905 bytes)
+BINARY: outputs/alerts/alert_stranger_id7_20260607_142837.jpg (81565 bytes)
+BINARY: pictures/conv_kernels.png (31858 bytes)
+BINARY: pictures/custom_train_history.png (59655 bytes)
+BINARY: pictures/dropout_comparison.png (93473 bytes)
+BINARY: pictures/face_detect_result.jpg (107315 bytes)
+BINARY: pictures/feature_maps.png (67089 bytes)
+BINARY: pictures/mediapipe_face.jpg (107365 bytes)
+BINARY: pictures/misclassified.png (48036 bytes)
+BINARY: pictures/predict_samples.png (34592 bytes)
+BINARY: pictures/training_history.png (73034 bytes)
+BINARY: pictures/transfer_learning.png (97188 bytes)
+BINARY: pictures/transfer_predictions.png (216151 bytes)
+
+============================================================
+FILE: requirements-orangepi.txt (381 chars)
+============================================================
+# 香橙派 5 (ARM64 Linux) 安防项目 Python 依赖
+
+# 建议先: sudo apt install python3-opencv python3-pip
+
+# 再: pip3 install -r requirements-orangepi.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
+
+
+
+numpy>=1.23,<3
+
+ultralytics>=8.0
+
+mediapipe>=0.10.9
+
+facenet-pytorch>=2.5.0
+
+Pillow>=9.0
+
+lap>=0.5.12
+
+
+
+# PyTorch CPU 版（ARM64）— 若 pip 失败，见 DEPLOY_ORANGEPI5.md 单独安装
+
+torch>=2.0
+
+torchvision>=0.15
+
+
+
+============================================================
+FILE: run_security.log (1052 chars)
+============================================================
+Error in cpuinfo: prctl(PR_SVE_GET_VL) failed
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+W0000 00:00:1780813566.152076   16280 inference_feedback_manager.cc:114] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+[ WARN:0@59.898] global cap_v4l.cpp:803 requestBuffers VIDEOIO(V4L2:/dev/video0): failed VIDIOC_REQBUFS: errno=19 (No such device)
+人脸库: 1 人, 10 条特征
+加载 YOLO: /home/orangepi/Downloads/te/models/yolov8n.pt (imgsz=320)
+串口已打开: /dev/serial/by-id/usb-SEGGER_J-Link_000029534567-if00 @ 115200
+[串口] -> close
+加载人脸模型...
+  FaceNet 本地: /home/orangepi/Downloads/te/models/20180402-114759-vggface2.pt
+启动检测 (人脸每 10 帧, 每帧最多 1 人, 阈值 0.65)...
+摄像头: 640x480
+[告警] 陌生人 -> /home/orangepi/Downloads/te/outputs/alerts/alert_stranger_id1_20260607_142611.jpg
+[告警] 陌生人 -> /home/orangepi/Downloads/te/outputs/alerts/alert_stranger_id1_20260607_142644.jpg
+处理结束，告警截图目录: /home/orangepi/Downloads/te/outputs/alerts
+
+
+============================================================
+FILE: security/__init__.py (2 chars)
+============================================================
+
+
+
+
+============================================================
+FILE: security/alert_manager.py (839 chars)
+============================================================
+import time
+
+from datetime import datetime
+
+from pathlib import Path
+
+
+
+import cv2
+
+
+
+from security.config import ALERT_DIR, ALERT_COOLDOWN_SEC
+
+
+
+
+
+class AlertManager:
+
+    def __init__(self, cooldown=ALERT_COOLDOWN_SEC):
+
+        self.cooldown = cooldown
+
+        self._last_alert = {}  # track_id -> timestamp
+
+
+
+    def should_alert(self, track_id):
+
+        now = time.time()
+
+        last = self._last_alert.get(track_id, 0)
+
+        if now - last < self.cooldown:
+
+            return False
+
+        self._last_alert[track_id] = now
+
+        return True
+
+
+
+    def save_snapshot(self, frame, track_id, label):
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+        filename = f"alert_{label}_id{track_id}_{ts}.jpg"
+
+        path = Path(ALERT_DIR) / filename
+
+        cv2.imwrite(str(path), frame)
+
+        return str(path)
+
+
+
+============================================================
+FILE: security/config.py (1421 chars)
+============================================================
+import os
+
+
+
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+
+SECURITY_DIR = os.path.join(BASE_DIR, "security")
+
+
+
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
+FACE_DB_DIR = os.path.join(DATA_DIR, "face_db")
+
+VIDEO_DIR = os.path.join(DATA_DIR, "videos")
+
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+
+ALERT_DIR = os.path.join(OUTPUT_DIR, "alerts")
+
+
+
+DB_PATH = os.path.join(DATA_DIR, "security.db")
+
+
+
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+
+
+
+# YOLO 行人检测 + ByteTrack（优先使用项目 models/ 目录）
+
+YOLO_MODEL = os.path.join(MODELS_DIR, "yolov8n.pt")
+
+TRACKER = "bytetrack.yaml"
+
+PERSON_CLASS_ID = 0
+
+
+
+# 人脸识别
+
+MATCH_THRESHOLD = 0.65          # 余弦相似度，低于此视为陌生人
+
+ALERT_COOLDOWN_SEC = 30         # 同一 track_id 告警冷却
+
+FACE_DETECT_INTERVAL = 10       # 每 N 帧做一次人脸比对（香橙派建议 10~20）
+
+MAX_FACE_CHECKS_PER_FRAME = 1   # 每轮最多对几个行人做人脸（1=只处理最大框）
+
+CAMERA_WIDTH = 640
+
+CAMERA_HEIGHT = 480
+
+YOLO_IMGSZ = 320                # 推理边长，越小越快（320/416/640）
+
+YOLO_CONF = 0.45
+
+TORCH_NUM_THREADS = 4           # RK3588 可试 4~6
+
+DISPLAY_TARGET_FPS = 30       # 带窗口时的目标显示帧率
+
+ASYNC_CAMERA_DEFAULT = True   # 摄像头+窗口默认异步（显示与推理分离）
+
+
+
+SAMPLE_VIDEO_URL = (
+
+    "https://github.com/intel-iot-devkit/sample-videos/raw/master/"
+
+    "person-bicycle-car-detection.mp4"
+
+)
+
+SAMPLE_VIDEO_PATH = os.path.join(VIDEO_DIR, "person-detection.mp4")
+
+
+
+for d in (DATA_DIR, FACE_DB_DIR, VIDEO_DIR, OUTPUT_DIR, ALERT_DIR, MODELS_DIR):
+
+    os.makedirs(d, exist_ok=True)
+
+
+
+============================================================
+FILE: security/download_models.py (390 chars)
+============================================================
+"""
+
+预下载安防所需模型（香橙派上建议先跑通本脚本再 run_security）
+
+
+
+  python3 -m security.download_models
+
+"""
+
+from security.model_assets import ensure_all_models
+
+
+
+
+
+def main():
+
+    print("开始下载/检查模型（网络不稳可多试几次）...\n")
+
+    ensure_all_models(verbose=True, facenet=True)
+
+    print("\n全部完成。可执行:")
+
+    print("  python3 -m security.run_security --camera --device 0")
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+
+
+
+============================================================
+FILE: security/enroll.py (588 chars)
+============================================================
+"""注册人脸到库: 把照片放到 data/face_db/姓名/ 下，然后运行本脚本"""
+
+import sys
+
+
+
+from security.face_database import FaceDatabase, enroll_from_folders
+
+from security.face_embedder import FaceEmbedder
+
+
+
+
+
+def main():
+
+    print("扫描 data/face_db/ 注册人脸...")
+
+    with FaceEmbedder() as embedder:
+
+        db = enroll_from_folders(embedder)
+
+    if db.count() == 0:
+
+        print("\n未注册任何人。请创建目录并放入照片，例如:")
+
+        print("  data/face_db/张三/photo1.jpg")
+
+        print("  data/face_db/李四/photo2.jpg")
+
+        sys.exit(1)
+
+    print(f"当前库内人员: {db.list_persons()}")
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+
+
+
+============================================================
+FILE: security/face_database.py (4959 chars)
+============================================================
+import pickle
+
+import sqlite3
+
+from datetime import datetime
+
+from pathlib import Path
+
+
+
+import numpy as np
+
+
+
+from security.config import DB_PATH, FACE_DB_DIR, MATCH_THRESHOLD
+
+
+
+
+
+def cosine_sim(a, b):
+
+    return float(np.dot(a, b))
+
+
+
+
+
+class FaceDatabase:
+
+    def __init__(self, db_path=DB_PATH):
+
+        self.db_path = db_path
+
+        self._init_db()
+
+        self._cache = self._load_cache()
+
+
+
+    def _init_db(self):
+
+        with sqlite3.connect(self.db_path) as conn:
+
+            conn.execute(
+
+                """
+
+                CREATE TABLE IF NOT EXISTS persons (
+
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                    name TEXT UNIQUE NOT NULL
+
+                )
+
+                """
+
+            )
+
+            conn.execute(
+
+                """
+
+                CREATE TABLE IF NOT EXISTS embeddings (
+
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                    person_id INTEGER NOT NULL,
+
+                    vector BLOB NOT NULL,
+
+                    FOREIGN KEY (person_id) REFERENCES persons(id)
+
+                )
+
+                """
+
+            )
+
+            conn.execute(
+
+                """
+
+                CREATE TABLE IF NOT EXISTS alerts (
+
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+                    ts TEXT NOT NULL,
+
+                    track_id INTEGER,
+
+                    alert_type TEXT NOT NULL,
+
+                    person_name TEXT,
+
+                    similarity REAL,
+
+                    image_path TEXT
+
+                )
+
+                """
+
+            )
+
+
+
+    def _load_cache(self):
+
+        with sqlite3.connect(self.db_path) as conn:
+
+            rows = conn.execute(
+
+                """
+
+                SELECT p.name, e.vector
+
+                FROM embeddings e
+
+                JOIN persons p ON p.id = e.person_id
+
+                """
+
+            ).fetchall()
+
+        cache = {}
+
+        for name, blob in rows:
+
+            vec = pickle.loads(blob)
+
+            cache.setdefault(name, []).append(vec)
+
+        return cache
+
+
+
+    def add_person_embedding(self, name, vector):
+
+        blob = pickle.dumps(vector.astype(np.float32))
+
+        with sqlite3.connect(self.db_path) as conn:
+
+            conn.execute("INSERT OR IGNORE INTO persons(name) VALUES (?)", (name,))
+
+            person_id = conn.execute(
+
+                "SELECT id FROM persons WHERE name=?", (name,)
+
+            ).fetchone()[0]
+
+            conn.execute(
+
+                "INSERT INTO embeddings(person_id, vector) VALUES (?, ?)",
+
+                (person_id, blob),
+
+            )
+
+        self._cache.setdefault(name, []).append(vector)
+
+
+
+    def match(self, vector, threshold=MATCH_THRESHOLD):
+
+        """返回 (name, score) 或 (None, best_score)"""
+
+        best_name, best_score = None, -1.0
+
+        for name, vectors in self._cache.items():
+
+            for ref in vectors:
+
+                score = cosine_sim(vector, ref)
+
+                if score > best_score:
+
+                    best_score = score
+
+                    best_name = name
+
+        if best_score >= threshold:
+
+            return best_name, best_score
+
+        return None, best_score
+
+
+
+    def log_alert(self, track_id, alert_type, person_name, similarity, image_path):
+
+        with sqlite3.connect(self.db_path) as conn:
+
+            conn.execute(
+
+                """
+
+                INSERT INTO alerts(ts, track_id, alert_type, person_name, similarity, image_path)
+
+                VALUES (?, ?, ?, ?, ?, ?)
+
+                """,
+
+                (
+
+                    datetime.now().isoformat(timespec="seconds"),
+
+                    track_id,
+
+                    alert_type,
+
+                    person_name,
+
+                    similarity,
+
+                    image_path,
+
+                ),
+
+            )
+
+
+
+    def list_persons(self):
+
+        return list(self._cache.keys())
+
+
+
+    def count(self):
+
+        return sum(len(v) for v in self._cache.values())
+
+
+
+
+
+def enroll_from_folders(embedder, db=None):
+
+    """扫描 data/face_db/姓名/*.jpg 注册人脸"""
+
+    db = db or FaceDatabase()
+
+    exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+
+    enrolled = 0
+
+
+
+    for person_dir in sorted(Path(FACE_DB_DIR).iterdir()):
+
+        if not person_dir.is_dir():
+
+            continue
+
+        name = person_dir.name
+
+        for img_path in person_dir.iterdir():
+
+            if img_path.suffix.lower() not in exts:
+
+                continue
+
+            import cv2
+
+            img = cv2.imread(str(img_path))
+
+            if img is None:
+
+                print(f"  跳过无效图片: {img_path}")
+
+                continue
+
+            vec = embedder.embed(img)
+
+            if vec is None:
+
+                print(f"  未检测到人脸: {img_path}")
+
+                continue
+
+            db.add_person_embedding(name, vec)
+
+            enrolled += 1
+
+            print(f"  已注册: {name} <- {img_path.name}")
+
+
+
+    print(f"注册完成，共 {enrolled} 条特征，{len(db.list_persons())} 人")
+
+    return db
+
+
+
+============================================================
+FILE: security/face_embedder.py (2431 chars)
+============================================================
+import cv2
+
+import mediapipe as mp
+
+import numpy as np
+
+import torch
+
+from mediapipe.tasks import python
+
+from mediapipe.tasks.python import vision
+
+
+
+from security.model_assets import FACE_MODEL_PATH, ensure_blaze_face, load_facenet_model
+
+
+
+
+
+class FaceEmbedder:
+
+    """MediaPipe 裁脸 + FaceNet 512 维特征"""
+
+
+
+    def __init__(self, device=None):
+
+        ensure_blaze_face(verbose=False)
+
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.resnet = load_facenet_model(self.device, verbose=True)
+
+        options = vision.FaceDetectorOptions(
+
+            base_options=python.BaseOptions(model_asset_path=FACE_MODEL_PATH),
+
+            running_mode=vision.RunningMode.IMAGE,
+
+            min_detection_confidence=0.5,
+
+        )
+
+        self.face_detector = vision.FaceDetector.create_from_options(options)
+
+
+
+    def close(self):
+
+        self.face_detector.close()
+
+
+
+    def __enter__(self):
+
+        return self
+
+
+
+    def __exit__(self, *args):
+
+        self.close()
+
+
+
+    def _detect_largest_face(self, bgr_image):
+
+        rgb = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
+
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+
+        result = self.face_detector.detect(mp_image)
+
+        if not result.detections:
+
+            return None
+
+        h, w = bgr_image.shape[:2]
+
+        best, best_area = None, 0
+
+        for det in result.detections:
+
+            b = det.bounding_box
+
+            area = b.width * b.height
+
+            if area > best_area:
+
+                best_area = area
+
+                x1 = max(0, int(b.origin_x))
+
+                y1 = max(0, int(b.origin_y))
+
+                x2 = min(w, x1 + int(b.width))
+
+                y2 = min(h, y1 + int(b.height))
+
+                best = bgr_image[y1:y2, x1:x2]
+
+        return best
+
+
+
+    def embed(self, bgr_image):
+
+        """从 BGR 图像提取 L2 归一化特征，失败返回 None"""
+
+        face = self._detect_largest_face(bgr_image)
+
+        if face is None or face.size == 0:
+
+            return None
+
+        face = cv2.resize(face, (160, 160))
+
+        rgb = cv2.cvtColor(face, cv2.COLOR_BGR2RGB)
+
+        tensor = torch.tensor(rgb).permute(2, 0, 1).float().unsqueeze(0) / 255.0
+
+        tensor = (tensor - 0.5) / 0.5
+
+        with torch.no_grad():
+
+            emb = self.resnet(tensor.to(self.device)).cpu().numpy()[0]
+
+        norm = np.linalg.norm(emb)
+
+        return emb / norm if norm > 0 else None
+
+
+
+============================================================
+FILE: security/model_assets.py (6504 chars)
+============================================================
+"""模型文件检查与下载（香橙派网络不稳时需先单独执行 download_models）"""
+
+import os
+
+import time
+
+import urllib.request
+
+
+
+from security.config import BASE_DIR, MODELS_DIR
+
+
+
+YOLO_MODEL_PATH = os.path.join(MODELS_DIR, "yolov8n.pt")
+
+YOLO_URL = (
+
+    "https://github.com/ultralytics/assets/releases/download/v8.3.0/yolov8n.pt"
+
+)
+
+
+
+FACE_MODEL_PATH = os.path.join(MODELS_DIR, "blaze_face_short_range.tflite")
+
+FACE_MODEL_URL = (
+
+    "https://storage.googleapis.com/mediapipe-models/face_detector/"
+
+    "blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
+
+)
+
+
+
+FACENET_RELEASE_URL = (
+
+    "https://github.com/timesler/facenet-pytorch/releases/download/"
+
+    "v2.2.9/20180402-114759-vggface2.pt"
+
+)
+
+FACENET_LOCAL_CANDIDATES = (
+
+    os.path.join(MODELS_DIR, "20180402-114759-vggface2.pt"),
+
+    os.path.join(MODELS_DIR, "vggface2.pt"),
+
+)
+
+
+
+YOLO_FALLBACK_PATH = os.path.join(BASE_DIR, "yolov8n.pt")
+
+
+
+
+
+def resolve_yolo_path() -> str | None:
+
+    """models/yolov8n.pt 或项目根目录 yolov8n.pt"""
+
+    for path in (YOLO_MODEL_PATH, YOLO_FALLBACK_PATH):
+
+        if os.path.isfile(path) and os.path.getsize(path) >= 1_000_000:
+
+            return path
+
+    return None
+
+
+
+
+
+def get_yolo_model_path() -> str:
+
+    return resolve_yolo_path() or YOLO_MODEL_PATH
+
+
+
+
+
+def _download(url: str, dest: str, retries: int = 5, min_bytes: int = 1000) -> str:
+
+    os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+
+    if os.path.exists(dest) and os.path.getsize(dest) >= min_bytes:
+
+        print(f"  已有: {dest} ({os.path.getsize(dest)} bytes)")
+
+        return dest
+
+
+
+    last_err = None
+
+    for attempt in range(1, retries + 1):
+
+        try:
+
+            print(f"  下载 ({attempt}/{retries}): {url}")
+
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+
+            with urllib.request.urlopen(req, timeout=180) as resp, open(dest, "wb") as f:
+
+                f.write(resp.read())
+
+            if os.path.getsize(dest) < min_bytes:
+
+                raise OSError(f"文件过小: {dest}")
+
+            print(f"  完成: {dest}")
+
+            return dest
+
+        except Exception as e:
+
+            last_err = e
+
+            print(f"  失败: {e}")
+
+            if attempt < retries:
+
+                time.sleep(3 * attempt)
+
+    raise RuntimeError(f"无法下载 {url} -> {dest}: {last_err}") from last_err
+
+
+
+
+
+def ensure_yolo(verbose: bool = True) -> str:
+
+    if verbose:
+
+        print("[1/3] YOLO yolov8n.pt")
+
+    existing = resolve_yolo_path()
+
+    if existing:
+
+        if verbose:
+
+            print(f"  已有: {existing}")
+
+        return existing
+
+    return _download(YOLO_URL, YOLO_MODEL_PATH, min_bytes=1_000_000)
+
+
+
+
+
+def ensure_blaze_face(verbose: bool = True) -> str:
+
+    if verbose:
+
+        print("[2/3] MediaPipe blaze_face")
+
+    if os.path.isfile(FACE_MODEL_PATH) and os.path.getsize(FACE_MODEL_PATH) >= 10_000:
+
+        if verbose:
+
+            print(f"  已有: {FACE_MODEL_PATH}")
+
+        return FACE_MODEL_PATH
+
+    return _download(FACE_MODEL_URL, FACE_MODEL_PATH, min_bytes=10_000)
+
+
+
+
+
+def resolve_facenet_weights() -> str | None:
+
+    """优先 models/ 下的单文件权重（约 107MB）"""
+
+    for path in FACENET_LOCAL_CANDIDATES:
+
+        if os.path.isfile(path) and os.path.getsize(path) >= 1_000_000:
+
+            return path
+
+    ckpt = _torch_checkpoints_dir()
+
+    if os.path.isdir(ckpt):
+
+        for name in os.listdir(ckpt):
+
+            if name.endswith(".pt") and (
+
+                "vggface2" in name or "20180402-114759" in name
+
+            ):
+
+                path = os.path.join(ckpt, name)
+
+                if os.path.getsize(path) >= 1_000_000:
+
+                    return path
+
+    return None
+
+
+
+
+
+def _facenet_split_cache_ready() -> bool:
+
+    """facenet-pytorch 分片缓存（两个 vggface2_*.pt）"""
+
+    ckpt = _torch_checkpoints_dir()
+
+    if not os.path.isdir(ckpt):
+
+        return False
+
+    parts = [
+
+        n for n in os.listdir(ckpt)
+
+        if n.endswith(".pt") and n.startswith("vggface2_")
+
+    ]
+
+    return len(parts) >= 2
+
+
+
+
+
+def load_facenet_model(device: str = "cpu", verbose: bool = False):
+
+    """加载 FaceNet；无本地权重时不联网，避免香橙派超时"""
+
+    import torch
+
+    from facenet_pytorch import InceptionResnetV1
+
+
+
+    local = resolve_facenet_weights()
+
+    if local:
+
+        if verbose:
+
+            print(f"  FaceNet 本地: {local}")
+
+        # classify=False 输出 512 维特征；官方 .pt 含 logits 需剔除
+
+        model = InceptionResnetV1(pretrained=None, classify=False).eval()
+
+        try:
+
+            state = torch.load(local, map_location=device, weights_only=True)
+
+        except TypeError:
+
+            state = torch.load(local, map_location=device)
+
+        if isinstance(state, dict) and "state_dict" in state:
+
+            state = state["state_dict"]
+
+        state = {
+
+            k: v for k, v in state.items()
+
+            if not k.startswith("logits.")
+
+        }
+
+        model.load_state_dict(state, strict=True)
+
+        return model.to(device)
+
+
+
+    if _facenet_split_cache_ready():
+
+        if verbose:
+
+            print(f"  FaceNet 缓存: {_torch_checkpoints_dir()}")
+
+        return InceptionResnetV1(pretrained="vggface2").eval().to(device)
+
+
+
+    raise RuntimeError(
+
+        "未找到 FaceNet 权重（不会自动联网下载）。请任选一种方式:\n"
+
+        f"  1) 下载放到 models/20180402-114759-vggface2.pt\n"
+
+        f"     {FACENET_RELEASE_URL}\n"
+
+        f"  2) PC 执行 python -m security.download_models 后 scp:\n"
+
+        f"     models/20180402-114759-vggface2.pt\n"
+
+        f"     或整个 ~/.cache/torch/checkpoints/ 到板子同路径"
+
+    )
+
+
+
+
+
+def ensure_facenet(verbose: bool = True) -> None:
+
+    if verbose:
+
+        print("[3/3] FaceNet vggface2")
+
+    load_facenet_model(device="cpu", verbose=verbose)
+
+    if verbose:
+
+        print("  FaceNet 权重已就绪")
+
+
+
+
+
+def _torch_checkpoints_dir() -> str:
+
+    try:
+
+        from facenet_pytorch.models.inception_resnet_v1 import get_torch_home
+
+
+
+        return os.path.join(get_torch_home(), "checkpoints")
+
+    except Exception:
+
+        return os.path.expanduser("~/.cache/torch/checkpoints")
+
+
+
+
+
+def ensure_all_models(verbose: bool = True, facenet: bool = True) -> None:
+
+    ensure_yolo(verbose=verbose)
+
+    ensure_blaze_face(verbose=verbose)
+
+    if facenet:
+
+        ensure_facenet(verbose=verbose)
+
+
+
+
+
+def check_models_ready() -> list[str]:
+
+    """返回缺失项说明列表，空表示本地文件齐全（不含 FaceNet 缓存探测）"""
+
+    missing = []
+
+    if not resolve_yolo_path():
+
+        missing.append(
+
+            f"缺少 YOLO: {YOLO_MODEL_PATH} 或 {YOLO_FALLBACK_PATH}"
+
+        )
+
+    if not os.path.isfile(FACE_MODEL_PATH):
+
+        missing.append(f"缺少 {FACE_MODEL_PATH}")
+
+    return missing
+
+
+
+============================================================
+FILE: security/pipeline.py (14280 chars)
+============================================================
+import sys
+
+import threading
+
+import time
+
+import urllib.request
+
+
+
+import cv2
+
+import numpy as np
+
+import torch
+
+from ultralytics import YOLO
+
+
+
+from security.alert_manager import AlertManager
+
+from security.config import (
+
+    ALERT_DIR,
+
+    CAMERA_HEIGHT,
+
+    CAMERA_WIDTH,
+
+    FACE_DETECT_INTERVAL,
+
+    MAX_FACE_CHECKS_PER_FRAME,
+
+    MATCH_THRESHOLD,
+
+    PERSON_CLASS_ID,
+
+    SAMPLE_VIDEO_PATH,
+
+    SAMPLE_VIDEO_URL,
+
+    DISPLAY_TARGET_FPS,
+
+    TORCH_NUM_THREADS,
+
+    TRACKER,
+
+    YOLO_CONF,
+
+    YOLO_IMGSZ,
+
+)
+
+from security.face_database import FaceDatabase
+
+from security.face_embedder import FaceEmbedder
+
+from security.model_assets import check_models_ready, ensure_yolo, get_yolo_model_path
+
+
+
+
+
+def ensure_sample_video():
+
+    import os
+
+    if os.path.exists(SAMPLE_VIDEO_PATH):
+
+        return SAMPLE_VIDEO_PATH
+
+    os.makedirs(os.path.dirname(SAMPLE_VIDEO_PATH), exist_ok=True)
+
+    print(f"下载示例视频: {SAMPLE_VIDEO_URL}")
+
+    urllib.request.urlretrieve(SAMPLE_VIDEO_URL, SAMPLE_VIDEO_PATH)
+
+    return SAMPLE_VIDEO_PATH
+
+
+
+
+
+def open_camera(device: int, width: int, height: int):
+
+    if sys.platform.startswith("linux"):
+
+        cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+
+    else:
+
+        cap = cv2.VideoCapture(device)
+
+    if not cap.isOpened():
+
+        raise RuntimeError(f"无法打开摄像头 device={device}")
+
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+
+    actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    print(f"摄像头: {actual_w}x{actual_h}")
+
+    return cap
+
+
+
+
+
+def crop_person_upper_body(frame, box, upper_ratio=0.65):
+
+    x1, y1, x2, y2 = map(int, box)
+
+    h, w = frame.shape[:2]
+
+    x1, y1 = max(0, x1), max(0, y1)
+
+    x2, y2 = min(w, x2), min(h, y2)
+
+    ph = y2 - y1
+
+    y2 = min(h, y1 + int(ph * upper_ratio))
+
+    crop = frame[y1:y2, x1:x2]
+
+    return crop if crop.size > 0 else None
+
+
+
+
+
+def _box_area(box):
+
+    x1, y1, x2, y2 = box
+
+    return max(0, x2 - x1) * max(0, y2 - y1)
+
+
+
+
+
+def _parse_tracks(result):
+
+    boxes = result.boxes
+
+    if boxes is None or boxes.id is None:
+
+        return []
+
+    tracks = list(
+
+        zip(
+
+            boxes.xyxy.cpu().numpy(),
+
+            boxes.id.int().cpu().tolist(),
+
+        )
+
+    )
+
+    tracks.sort(key=lambda t: _box_area(t[0]), reverse=True)
+
+    return tracks
+
+
+
+
+
+def _update_identity(
+
+    frame,
+
+    tracks,
+
+    infer_idx,
+
+    embedder,
+
+    db,
+
+    alert_mgr,
+
+    identity_cache,
+
+    face_interval,
+
+    max_face_checks,
+
+):
+
+    if infer_idx % face_interval != 0:
+
+        return
+
+    for box, track_id in tracks[:max_face_checks]:
+
+        tid = int(track_id)
+
+        if tid in identity_cache and not identity_cache[tid]["is_stranger"]:
+
+            continue
+
+        crop = crop_person_upper_body(frame, box)
+
+        if crop is None:
+
+            continue
+
+        emb = embedder.embed(crop)
+
+        if emb is None:
+
+            continue
+
+        name, score = db.match(emb)
+
+        if name:
+
+            identity_cache[tid] = {"name": name, "is_stranger": False}
+
+        else:
+
+            identity_cache[tid] = {"name": None, "is_stranger": True}
+
+            if alert_mgr.should_alert(tid):
+
+                snap = alert_mgr.save_snapshot(frame, tid, "stranger")
+
+                db.log_alert(tid, "stranger", None, score, snap)
+
+                print(f"[告警] 陌生人 -> {snap}")
+
+
+
+
+
+def _build_overlays(tracks, identity_cache):
+
+    """返回 [(box, label, color), ...] 供显示线程绘制"""
+
+    overlays = []
+
+    for box, track_id in tracks:
+
+        tid = int(track_id)
+
+        info = identity_cache.get(tid)
+
+        if info is None:
+
+            continue
+
+        if info["is_stranger"]:
+
+            overlays.append((box, "陌生人", (0, 0, 255)))
+
+        else:
+
+            overlays.append((box, info["name"], (0, 255, 0)))
+
+    return overlays
+
+
+
+
+
+def _draw_overlays(frame, overlays):
+
+    for box, label, color in overlays:
+
+        x1, y1, x2, y2 = map(int, box)
+
+        cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+
+        cv2.putText(
+
+            frame, label, (x1, max(y1 - 8, 20)),
+
+            cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
+
+        )
+
+
+
+
+
+def _process_frame(
+
+    frame,
+
+    result,
+
+    frame_idx,
+
+    embedder,
+
+    db,
+
+    alert_mgr,
+
+    identity_cache,
+
+    face_interval,
+
+    max_face_checks,
+
+):
+
+    tracks = _parse_tracks(result)
+
+    _update_identity(
+
+        frame, tracks, frame_idx, embedder, db, alert_mgr,
+
+        identity_cache, face_interval, max_face_checks,
+
+    )
+
+    _draw_overlays(frame, _build_overlays(tracks, identity_cache))
+
+
+
+
+
+class _LatestFrame:
+
+    """推理线程只处理最新一帧，避免积压"""
+
+
+
+    def __init__(self):
+
+        self._lock = threading.Lock()
+
+        self._frame = None
+
+        self._event = threading.Event()
+
+
+
+    def offer(self, frame: np.ndarray):
+
+        with self._lock:
+
+            self._frame = frame
+
+        self._event.set()
+
+
+
+    def take(self, stop: threading.Event) -> np.ndarray | None:
+
+        while not stop.is_set():
+
+            if self._event.wait(timeout=0.05):
+
+                with self._lock:
+
+                    frame = self._frame
+
+                    self._frame = None
+
+                    self._event.clear()
+
+                if frame is not None:
+
+                    return frame
+
+        return None
+
+
+
+
+
+def _run_camera_async(
+
+    source: int,
+
+    yolo,
+
+    track_kw,
+
+    embedder,
+
+    db,
+
+    alert_mgr,
+
+    *,
+
+    camera_width,
+
+    camera_height,
+
+    face_interval,
+
+    max_face_checks,
+
+    profile,
+
+    display_fps,
+
+    max_frames,
+
+):
+
+    broker = _LatestFrame()
+
+    stop = threading.Event()
+
+    identity_cache = {}
+
+    overlays = []
+
+    display_fps_ema = 0.0
+
+    infer_fps_ema = 0.0
+
+    lock = threading.Lock()
+
+    infer_idx = 0
+
+
+
+    def worker():
+
+        nonlocal infer_idx, infer_fps_ema
+
+        infer_t0 = time.perf_counter()
+
+        infer_count = 0
+
+        while not stop.is_set():
+
+            frame = broker.take(stop)
+
+            if frame is None:
+
+                continue
+
+            infer_idx += 1
+
+            result = yolo.track(frame, **track_kw)[0]
+
+            tracks = _parse_tracks(result)
+
+            _update_identity(
+
+                frame, tracks, infer_idx, embedder, db, alert_mgr,
+
+                identity_cache, face_interval, max_face_checks,
+
+            )
+
+            new_overlays = _build_overlays(tracks, identity_cache)
+
+            with lock:
+
+                overlays.clear()
+
+                overlays.extend(new_overlays)
+
+            infer_count += 1
+
+            if profile and infer_count % 10 == 0:
+
+                elapsed = time.perf_counter() - infer_t0
+
+                if elapsed > 0:
+
+                    inst = 10 / elapsed
+
+                    infer_fps_ema = inst if infer_fps_ema == 0 else 0.7 * infer_fps_ema + 0.3 * inst
+
+                infer_t0 = time.perf_counter()
+
+
+
+    latest_frame = None
+
+
+
+    def capture_worker():
+
+        nonlocal latest_frame
+
+        cap = open_camera(source, camera_width, camera_height)
+
+        try:
+
+            while not stop.is_set():
+
+                ret, frame = cap.read()
+
+                if not ret:
+
+                    time.sleep(0.005)
+
+                    continue
+
+                with lock:
+
+                    latest_frame = frame
+
+                broker.offer(frame)
+
+        finally:
+
+            cap.release()
+
+
+
+    th = threading.Thread(target=worker, daemon=True)
+
+    cap_th = threading.Thread(target=capture_worker, daemon=True)
+
+    th.start()
+
+    cap_th.start()
+
+
+
+    frame_period = 1.0 / max(display_fps, 1)
+
+    next_tick = time.perf_counter()
+
+    display_idx = 0
+
+    disp_t0 = time.perf_counter()
+
+
+
+    print(
+
+        f"异步模式: 显示目标 {display_fps} FPS | "
+
+        f"推理 imgsz={track_kw['imgsz']} | 人脸每 {face_interval} 次推理"
+
+    )
+
+
+
+    try:
+
+        while not stop.is_set():
+
+            display_idx += 1
+
+            if max_frames and display_idx > max_frames:
+
+             
+
+... [truncated, total 14280 chars] ...
+
+============================================================
+FILE: security/remote_client.py (8177 chars)
+============================================================
+"""
+
+香橙派薄客户端 — 摄像头采集 + 窗口显示，推理在 PC 远程服务
+
+
+
+  python3 -m security.remote_client --server http://192.168.x.x:8765 --camera --device 0
+
+"""
+
+import argparse
+
+import sys
+
+import threading
+
+import time
+
+
+
+import cv2
+
+import numpy as np
+
+import requests
+
+
+
+from security.config import (
+
+    CAMERA_HEIGHT,
+
+    CAMERA_WIDTH,
+
+    DISPLAY_TARGET_FPS,
+
+)
+
+from security.pipeline import _draw_overlays, open_camera
+
+
+
+
+
+class _OverlayStore:
+
+    def __init__(self):
+
+        self._lock = threading.Lock()
+
+        self.overlays = []
+
+        self.infer_ms = 0.0
+
+        self.infer_fps_ema = 0.0
+
+        self.server_ok = False
+
+
+
+    def update(self, overlays, infer_ms):
+
+        with self._lock:
+
+            self.overlays = overlays
+
+            self.infer_ms = infer_ms
+
+            self.server_ok = True
+
+
+
+    def snapshot(self):
+
+        with self._lock:
+
+            return list(self.overlays), self.infer_ms, self.infer_fps_ema, self.server_ok
+
+
+
+
+
+def _json_to_overlays(items):
+
+    out = []
+
+    for item in items:
+
+        box = item["box"]
+
+        color = tuple(item["color"])
+
+        out.append((box, item["label"], color))
+
+    return out
+
+
+
+
+
+def _post_frame(server: str, jpeg_bytes: bytes, timeout: float) -> dict | None:
+
+    url = server.rstrip("/") + "/api/infer"
+
+    try:
+
+        resp = requests.post(
+
+            url,
+
+            files={"frame": ("frame.jpg", jpeg_bytes, "image/jpeg")},
+
+            timeout=timeout,
+
+        )
+
+        resp.raise_for_status()
+
+        return resp.json()
+
+    except requests.RequestException as e:
+
+        detail = ""
+
+        if hasattr(e, "response") and e.response is not None:
+
+            try:
+
+                detail = e.response.text[:200]
+
+            except Exception:
+
+                pass
+
+        print(f"[网络] 请求失败: {e} {detail}")
+
+        return None
+
+
+
+
+
+def run_remote_client(
+
+    server: str,
+
+    device: int,
+
+    *,
+
+    width=CAMERA_WIDTH,
+
+    height=CAMERA_HEIGHT,
+
+    jpeg_quality=75,
+
+    display_fps=DISPLAY_TARGET_FPS,
+
+    profile=True,
+
+    request_timeout=10.0,
+
+):
+
+    if sys.platform.startswith("linux"):
+
+        import os
+
+        os.environ.setdefault("OPENCV_VIDEOIO_PRIORITY_LIST", "V4L2")
+
+
+
+    health_url = server.rstrip("/") + "/health"
+
+    try:
+
+        h = requests.get(health_url, timeout=5)
+
+        h.raise_for_status()
+
+        info = h.json()
+
+        print(f"已连接 PC 服务: {server}")
+
+        print(f"  人脸库: {info.get('persons')} 人, {info.get('embeddings')} 条特征")
+
+    except requests.RequestException as e:
+
+        print(f"无法连接 {health_url}: {e}")
+
+        print("请先在 PC 启动: python -m security.remote_server")
+
+        sys.exit(1)
+
+
+
+    store = _OverlayStore()
+
+    stop = threading.Event()
+
+    latest_frame = None
+
+    frame_lock = threading.Lock()
+
+
+
+    def capture_worker():
+
+        nonlocal latest_frame
+
+        cap = open_camera(device, width, height)
+
+        try:
+
+            while not stop.is_set():
+
+                ret, frame = cap.read()
+
+                if not ret:
+
+                    time.sleep(0.005)
+
+                    continue
+
+                with frame_lock:
+
+                    latest_frame = frame
+
+        finally:
+
+            cap.release()
+
+
+
+    def network_worker():
+
+        infer_t0 = time.perf_counter()
+
+        infer_count = 0
+
+        pending = {"bytes": None}
+
+        pend_lock = threading.Lock()
+
+
+
+        def offer_jpeg(jpeg_bytes):
+
+            with pend_lock:
+
+                pending["bytes"] = jpeg_bytes
+
+
+
+        while not stop.is_set():
+
+            with frame_lock:
+
+                raw = latest_frame
+
+            if raw is None:
+
+                time.sleep(0.01)
+
+                continue
+
+            ok, enc = cv2.imencode(
+
+                ".jpg", raw, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality]
+
+            )
+
+            if ok:
+
+                offer_jpeg(enc.tobytes())
+
+
+
+            with pend_lock:
+
+                jpeg = pending["bytes"]
+
+            if jpeg is None:
+
+                time.sleep(0.005)
+
+                continue
+
+
+
+            data = _post_frame(server, jpeg, request_timeout)
+
+            if data and data.get("ok"):
+
+                overlays = _json_to_overlays(data.get("overlays", []))
+
+                store.update(overlays, data.get("infer_ms", 0))
+
+                infer_count += 1
+
+                if profile and infer_count % 5 == 0:
+
+                    elapsed = time.perf_counter() - infer_t0
+
+                    if elapsed > 0:
+
+                        inst = 5 / elapsed
+
+                        with store._lock:
+
+                            store.infer_fps_ema = (
+
+                                inst if store.infer_fps_ema == 0
+
+                                else 0.7 * store.infer_fps_ema + 0.3 * inst
+
+                            )
+
+                    infer_t0 = time.perf_counter()
+
+
+
+    cap_th = threading.Thread(target=capture_worker, daemon=True)
+
+    net_th = threading.Thread(target=network_worker, daemon=True)
+
+    cap_th.start()
+
+    net_th.start()
+
+
+
+    frame_period = 1.0 / max(display_fps, 1)
+
+    next_tick = time.perf_counter()
+
+    display_idx = 0
+
+    disp_t0 = time.perf_counter()
+
+    display_fps_ema = 0.0
+
+
+
+    print(f"远程模式: 显示 {display_fps} FPS | 推理在 PC ({server})")
+
+
+
+    try:
+
+        while not stop.is_set():
+
+            display_idx += 1
+
+            with frame_lock:
+
+                raw = latest_frame
+
+            if raw is None:
+
+                time.sleep(0.01)
+
+                continue
+
+
+
+            overlays, infer_ms, infer_fps, server_ok = store.snapshot()
+
+            canvas = raw.copy()
+
+            _draw_overlays(canvas, overlays)
+
+
+
+            if profile:
+
+                if display_idx % 15 == 0:
+
+                    elapsed = time.perf_counter() - disp_t0
+
+                    if elapsed > 0:
+
+                        inst = 15 / elapsed
+
+                        display_fps_ema = (
+
+                            inst if display_fps_ema == 0
+
+                            else 0.7 * display_fps_ema + 0.3 * inst
+
+                        )
+
+                    disp_t0 = time.perf_counter()
+
+                status = "OK" if server_ok else "等待PC"
+
+                cv2.putText(
+
+                    canvas,
+
+                    f"显示:{display_fps_ema:.0f} 远程推理:{infer_fps:.0f} {infer_ms:.0f}ms {status}",
+
+                    (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 0), 2,
+
+                )
+
+
+
+            cv2.imshow("Security Remote", canvas)
+
+            if (cv2.waitKey(1) & 0xFF) == ord("q"):
+
+                break
+
+
+
+            next_tick += frame_period
+
+            sleep = next_tick - time.perf_counter()
+
+            if sleep > 0:
+
+                time.sleep(sleep)
+
+            else:
+
+                next_tick = time.perf_counter()
+
+    finally:
+
+        stop.set()
+
+        cap_th.join(timeout=2)
+
+        net_th.join(timeout=2)
+
+        cv2.destroyAllWindows()
+
+
+
+
+
+def main():
+
+    parser = argparse.ArgumentParser(description="香橙派远程推理客户端")
+
+    parser.add_argument(
+
+        "--server", "-s", required=True,
+
+        help="PC 服务地址，如 http://192.168.1.100:8765",
+
+    )
+
+    parser.add_argument("--camera", "-c", action="store_true", help="USB 摄像头")
+
+    parser.add_argument("--device", type=int, default=0)
+
+    parser.add_argument("--width", type=int, default=CAMERA_WIDTH)
+
+    parser.add_argument("--height", type=int, default=CAMERA_HEIGHT)
+
+    parser.add_argument("--display-fps", type=int, default=DISPLAY_TARGET_FPS)
+
+    parser.add_argument("--jpeg-quality", type=int, default=75)
+
+    parser.add_argument("--timeout", type=float, default=10.0)
+
+    parser.add_argument("--profile", action="store_true", default=True, help="显示 FPS（默认开）")
+
+    parser.add_argument("--no-profile", action="store_true", help="不显示 FPS 叠加")
+
+    args = parser.parse_args()
+
+
+
+    if not args.camera:
+
+        parser.error("远程客户端需加 --camera")
+
+
+
+    run_remote_client(
+
+        args.server,
+
+        args.device,
+
+        width=args.width,
+
+        height=args.height,
+
+        display_fps=args.display_fps,
+
+        j
+
+... [truncated, total 8177 chars] ...
+
+============================================================
+FILE: security/run_security.py (4393 chars)
+============================================================
+"""
+
+安防 Demo 入口 — 无需专用硬件，视频文件即可
+
+
+
+步骤:
+
+  1. 把已知人员照片放入 data/face_db/姓名/*.jpg
+
+  2. python -m security.enroll
+
+  3. python -m security.run_security --video data/videos/xxx.mp4
+
+     或不传 --video，自动下载示例视频
+
+
+
+  笔记本摄像头: python -m security.run_security --camera
+
+  保存输出视频: --save outputs/result.mp4
+
+"""
+
+import argparse
+
+import os
+
+import sys
+
+
+
+from security.config import (
+
+    ASYNC_CAMERA_DEFAULT,
+
+    CAMERA_HEIGHT,
+
+    CAMERA_WIDTH,
+
+    DISPLAY_TARGET_FPS,
+
+    FACE_DETECT_INTERVAL,
+
+    MAX_FACE_CHECKS_PER_FRAME,
+    OUTPUT_DIR,
+    SERIAL_BAUD,
+    SERIAL_CLOSE_DELAY_SEC,
+    SERIAL_DEVICE,
+    YOLO_IMGSZ,
+)
+from security.face_database import FaceDatabase
+
+from security.pipeline import ensure_sample_video, run_pipeline
+
+
+
+
+
+def main():
+
+    parser = argparse.ArgumentParser(description="安防: 检测+跟踪+人脸库+告警")
+
+    parser.add_argument("--video", "-v", help="视频文件路径")
+
+    parser.add_argument("--camera", "-c", action="store_true", help="使用 USB 摄像头")
+
+    parser.add_argument("--device", type=int, default=0, help="摄像头索引，对应 /dev/videoN（默认 0）")
+
+    parser.add_argument("--no-show", action="store_true", help="不显示窗口")
+
+    parser.add_argument("--save", help="保存标注后的视频路径")
+
+    parser.add_argument("--max-frames", type=int, help="最多处理帧数(测试用)")
+
+    parser.add_argument("--width", type=int, default=CAMERA_WIDTH, help="摄像头宽度")
+
+    parser.add_argument("--height", type=int, default=CAMERA_HEIGHT, help="摄像头高度")
+
+    parser.add_argument("--imgsz", type=int, default=YOLO_IMGSZ, help="YOLO 推理边长(越小越快)")
+
+    parser.add_argument(
+
+        "--face-interval", type=int, default=FACE_DETECT_INTERVAL,
+
+        help="每 N 帧做人脸识别",
+
+    )
+
+    parser.add_argument(
+
+        "--max-face", type=int, default=MAX_FACE_CHECKS_PER_FRAME,
+
+        help="每轮最多识别几个行人",
+
+    )
+
+    parser.add_argument("--profile", action="store_true", help="画面显示 FPS（显示/推理分开统计）")
+
+    parser.add_argument(
+
+        "--sync", action="store_true",
+
+        help="同步模式（推理完才显示，较慢）",
+
+    )
+
+    parser.add_argument(
+        "--display-fps", type=int, default=DISPLAY_TARGET_FPS,
+        help="窗口目标帧率（默认 30）",
+    )
+    parser.add_argument(
+        "--serial-device", default=SERIAL_DEVICE,
+        help="识别结果输出串口设备（默认 auto，自动选择 /dev/ttyACM*）",
+    )
+    parser.add_argument(
+        "--serial-baud", type=int, default=SERIAL_BAUD,
+        help="串口波特率（默认 115200）",
+    )
+    parser.add_argument(
+        "--no-serial", action="store_true",
+        help="禁用识别结果串口输出",
+    )
+    parser.add_argument(
+        "--serial-close-delay", type=float, default=SERIAL_CLOSE_DELAY_SEC,
+        help="已知人员丢失后延时发送 close 的秒数（默认 %(default)s）",
+    )
+    args = parser.parse_args()
+
+
+
+    if args.camera:
+
+        if sys.platform.startswith("linux"):
+
+            os.environ.setdefault("OPENCV_VIDEOIO_PRIORITY_LIST", "V4L2")
+
+        source = args.device
+
+    elif args.video:
+
+        source = args.video
+
+    else:
+
+        source = ensure_sample_video()
+
+        print(f"使用示例视频: {source}")
+
+
+
+    db = FaceDatabase()
+
+    print(f"人脸库: {len(db.list_persons())} 人, {db.count()} 条特征")
+
+
+
+    try:
+
+        run_pipeline(
+
+            source=source,
+
+            db=db,
+
+            show=not args.no_show,
+
+            save_video=args.save,
+
+            max_frames=args.max_frames,
+
+            camera_width=args.width,
+
+            camera_height=args.height,
+
+            yolo_imgsz=args.imgsz,
+
+            face_interval=args.face_interval,
+
+            max_face_checks=args.max_face,
+            profile=args.profile,
+            async_display=args.camera and not args.no_show and not args.sync
+            if ASYNC_CAMERA_DEFAULT
+            else False,
+            display_fps=args.display_fps,
+            serial_device=None if args.no_serial else args.serial_device,
+            serial_baud=args.serial_baud,
+            serial_close_delay_sec=args.serial_close_delay,
+        )
+    except KeyboardInterrupt:
+
+        print("\n已中断")
+
+    except Exception as e:
+
+        print(f"错误: {e}", file=sys.stderr)
+
+        err = str(e).lower()
+
+        if "remote" in err or "connection" in err or "download" in err:
+
+            print(
+
+                "\n多为首次下载模型失败（GitHub/Google 在板子上不稳定）。请先执行:\n"
+
+                "  python3 -m security.download_models\n"
+
+                "或在 PC 下载后 scp 到项目 models/20180402-114759-vggface2.pt",
+
+                file=sys.stderr,
+
+            )
+
+        sys.exit(1)
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+
+
+
+============================================================
+FILE: security/serial_gate.py (3356 chars)
+============================================================
+import os
+import termios
+import threading
+import time
+from glob import glob
+
+
+class SerialGate:
+    def __init__(
+        self,
+        device="auto",
+        baud=115200,
+        line_ending="\n",
+        close_delay_sec=1.0,
+    ):
+        self.device = device
+        self.baud = baud
+        self.line_ending = line_ending
+        self.close_delay_sec = close_delay_sec
+        self._fd = None
+        self._last_command = None
+        self._last_known_seen = None
+        self._lock = threading.Lock()
+        self._open()
+        self.send("close")
+
+    @staticmethod
+    def resolve_device(device):
+        if device and device != "auto":
+            return device
+
+        by_id = sorted(glob("/dev/serial/by-id/*"))
+        for path in by_id:
+            target = os.path.realpath(path)
+            if os.path.basename(target).startswith("ttyACM"):
+                return path
+
+        tty_acm = sorted(glob("/dev/ttyACM*"))
+        if tty_acm:
+            return tty_acm[0]
+
+        return "/dev/ttyACM0"
+
+    def _open(self):
+        self.device = self.resolve_device(self.device)
+        try:
+            self._fd = os.open(self.device, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+            self._configure()
+            print(f"串口已打开: {self.device} @ {self.baud}")
+        except OSError as e:
+            self._fd = None
+            print(f"警告: 无法打开串口 {self.device}: {e}")
+
+    def _configure(self):
+        baud_const = getattr(termios, f"B{self.baud}", None)
+        if baud_const is None:
+            raise OSError(f"不支持的波特率: {self.baud}")
+
+        attrs = termios.tcgetattr(self._fd)
+        attrs[0] = 0
+        attrs[1] = 0
+        attrs[2] |= termios.CLOCAL | termios.CREAD
+        attrs[2] &= ~termios.PARENB
+        attrs[2] &= ~termios.CSTOPB
+        attrs[2] &= ~termios.CSIZE
+        attrs[2] |= termios.CS8
+        if hasattr(termios, "CRTSCTS"):
+            attrs[2] &= ~termios.CRTSCTS
+        attrs[3] = 0
+        attrs[4] = baud_const
+        attrs[5] = baud_const
+        attrs[6][termios.VMIN] = 0
+        attrs[6][termios.VTIME] = 0
+        termios.tcsetattr(self._fd, termios.TCSANOW, attrs)
+
+    def send(self, command):
+        with self._lock:
+            if self._fd is None or command == self._last_command:
+                return False
+            data = f"{command}{self.line_ending}".encode("ascii")
+            try:
+                os.write(self._fd, data)
+                self._last_command = command
+                print(f"[串口] -> {command}")
+                return True
+            except OSError as e:
+                print(f"警告: 串口发送失败 {command}: {e}")
+                self._close_fd()
+                return False
+
+    def update_known_presence(self, known_present):
+        now = time.monotonic()
+        if known_present:
+            self._last_known_seen = now
+            self.send("open")
+            return
+
+        if self._last_known_seen is None:
+            self.send("close")
+            return
+
+        if now - self._last_known_seen >= self.close_delay_sec:
+            self._last_known_seen = None
+            self.send("close")
+
+    def _close_fd(self):
+        if self._fd is not None:
+            os.close(self._fd)
+            self._fd = None
+
+    def close(self):
+        if self._fd is not None and self._last_command != "close":
+            self.send("close")
+        self._close_fd()
+
+
+============================================================
+FILE: setup_venv.sh (490 chars)
+============================================================
+#!/bin/bash
+
+# 仅创建并激活项目 venv（可单独执行，勿逐段粘贴 install_orangepi.sh）
+
+# 用法: cd ~/test/te && bash setup_venv.sh
+
+
+
+set -e
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+cd "$ROOT"
+
+
+
+if [ ! -f "$ROOT/requirements-orangepi.txt" ]; then
+
+    echo "错误: 当前目录不是项目根（缺少 requirements-orangepi.txt）"
+
+    echo "请: cd ~/test/te"
+
+    exit 1
+
+fi
+
+
+
+echo "项目目录: $ROOT"
+
+python3 -m venv "$ROOT/venv"
+
+echo ""
+
+echo "venv 已创建: $ROOT/venv"
+
+echo "请在本终端执行（激活环境）:"
+
+echo "  source $ROOT/venv/bin/activate"
+
+
+BINARY: tensflaw/cifar10_mobilenet.keras (22011345 bytes)
+
+============================================================
+FILE: tensflaw/face_detect.py (5030 chars)
+============================================================
+"""
+
+第 7 课：人脸检测（OpenCV + Haar Cascade）
+
+
+
+用法:
+
+  python face_detect.py                    # 下载示例图并检测
+
+  python face_detect.py --image 照片.jpg   # 检测指定图片
+
+  python face_detect.py --camera           # 摄像头实时检测（按 q 退出）
+
+
+
+Haar Cascade 是经典人脸检测方法：快速、无需 GPU、适合入门。
+
+"""
+
+import argparse
+
+import os
+
+import sys
+
+import urllib.request
+
+
+
+import cv2
+
+import numpy as np
+
+
+
+BASE_DIR = os.path.dirname(__file__)
+
+IMAGES_DIR = os.path.join(BASE_DIR, "images")
+
+PICTURES_DIR = os.path.join(BASE_DIR, "pictures")
+
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+os.makedirs(PICTURES_DIR, exist_ok=True)
+
+
+
+SAMPLE_URL = "https://raw.githubusercontent.com/opencv/opencv/master/samples/data/lena.jpg"
+
+SAMPLE_PATH = os.path.join(IMAGES_DIR, "sample_lena.jpg")
+
+
+
+# OpenCV 自带的 Haar 模型路径
+
+CASCADE_PATH = os.path.join(
+
+    cv2.data.haarcascades, "haarcascade_frontalface_default.xml"
+
+)
+
+
+
+
+
+def load_detector():
+
+    """加载 Haar 人脸检测器"""
+
+    if not os.path.exists(CASCADE_PATH):
+
+        raise FileNotFoundError(f"未找到模型: {CASCADE_PATH}")
+
+    detector = cv2.CascadeClassifier(CASCADE_PATH)
+
+    if detector.empty():
+
+        raise RuntimeError("CascadeClassifier 加载失败")
+
+    return detector
+
+
+
+
+
+def ensure_sample_image():
+
+    """确保有一张示例图可用于演示"""
+
+    if os.path.exists(SAMPLE_PATH):
+
+        return SAMPLE_PATH
+
+    print(f"下载示例图: {SAMPLE_URL}")
+
+    urllib.request.urlretrieve(SAMPLE_URL, SAMPLE_PATH)
+
+    return SAMPLE_PATH
+
+
+
+
+
+def detect_faces(detector, image, scale_factor=1.1, min_neighbors=5, min_size=(30, 30)):
+
+    """
+
+    在图像中检测人脸。
+
+
+
+    参数:
+
+        scale_factor: 图像金字塔缩放步长，越小越慢但越准
+
+        min_neighbors: 候选框合并阈值，越大误检越少
+
+        min_size: 忽略小于此尺寸的检测框
+
+
+
+    返回:
+
+        faces: list of (x, y, w, h)
+
+    """
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    gray = cv2.equalizeHist(gray)  # 直方图均衡，改善光照
+
+
+
+    faces = detector.detectMultiScale(
+
+        gray,
+
+        scaleFactor=scale_factor,
+
+        minNeighbors=min_neighbors,
+
+        minSize=min_size,
+
+        flags=cv2.CASCADE_SCALE_IMAGE,
+
+    )
+
+    return faces
+
+
+
+
+
+def draw_faces(image, faces):
+
+    """在原图上画绿色框和数量标注"""
+
+    output = image.copy()
+
+    for i, (x, y, w, h) in enumerate(faces):
+
+        cv2.rectangle(output, (x, y), (x + w, y + h), (0, 255, 0), 2)
+
+        cv2.putText(
+
+            output,
+
+            f"face {i + 1}",
+
+            (x, y - 8),
+
+            cv2.FONT_HERSHEY_SIMPLEX,
+
+            0.5,
+
+            (0, 255, 0),
+
+            1,
+
+            cv2.LINE_AA,
+
+        )
+
+    cv2.putText(
+
+        output,
+
+        f"count: {len(faces)}",
+
+        (10, 25),
+
+        cv2.FONT_HERSHEY_SIMPLEX,
+
+        0.8,
+
+        (0, 0, 255),
+
+        2,
+
+        cv2.LINE_AA,
+
+    )
+
+    return output
+
+
+
+
+
+def detect_image(image_path, save_path=None, show=True):
+
+    """检测单张图片"""
+
+    image = cv2.imread(image_path)
+
+    if image is None:
+
+        raise FileNotFoundError(f"无法读取图片: {image_path}")
+
+
+
+    detector = load_detector()
+
+    faces = detect_faces(detector, image)
+
+    result = draw_faces(image, faces)
+
+
+
+    print(f"图片: {image_path}")
+
+    print(f"检测到 {len(faces)} 张人脸")
+
+    for i, (x, y, w, h) in enumerate(faces):
+
+        print(f"  face {i + 1}: x={x}, y={y}, w={w}, h={h}")
+
+
+
+    if save_path:
+
+        cv2.imwrite(save_path, result)
+
+        print(f"结果已保存: {save_path}")
+
+
+
+    if show:
+
+        cv2.imshow("Face Detection", result)
+
+        print("按任意键关闭窗口...")
+
+        cv2.waitKey(0)
+
+        cv2.destroyAllWindows()
+
+
+
+    return faces, result
+
+
+
+
+
+def detect_camera(camera_id=0):
+
+    """摄像头实时人脸检测，按 q 退出"""
+
+    cap = cv2.VideoCapture(camera_id)
+
+    if not cap.isOpened():
+
+        raise RuntimeError(
+
+            f"无法打开摄像头 (id={camera_id})。请检查设备或改用 --image"
+
+        )
+
+
+
+    detector = load_detector()
+
+    print("摄像头已启动，按 q 退出")
+
+
+
+    while True:
+
+        ok, frame = cap.read()
+
+        if not ok:
+
+            print("读取帧失败")
+
+            break
+
+
+
+        faces = detect_faces(detector, frame)
+
+        frame = draw_faces(frame, faces)
+
+
+
+        cv2.imshow("Face Detection - Camera", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+
+            break
+
+
+
+    cap.release()
+
+    cv2.destroyAllWindows()
+
+
+
+
+
+def parse_args():
+
+    parser = argparse.ArgumentParser(description="OpenCV Haar 人脸检测")
+
+    parser.add_argument("--image", "-i", help="待检测图片路径")
+
+    parser.add_argument("--camera", "-c", action="store_true", help="使用摄像头")
+
+    parser.add_argument(
+
+        "--no-show", action="store_true", help="不弹窗，只保存结果"
+
+    )
+
+    return parser.parse_args()
+
+
+
+
+
+def main():
+
+    args = parse_args()
+
+    save_path = os.path.join(PICTURES_DIR, "face_detect_result.jpg")
+
+
+
+    try:
+
+        if args.camera:
+
+            detect_camera()
+
+        elif args.image:
+
+            detect_image(args.image, save_path=save_path, show=not args.no_show)
+
+        else:
+
+            sample = ensure_sample_image()
+
+            detect_image(sample, save_path=save_path, show=not args.no_show)
+
+    except Exception as e:
+
+        print(f"错误: {e}", file=sys.stderr)
+
+        sys.exit(1)
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+
+
+
+============================================================
+FILE: tensflaw/main.py (267 chars)
+============================================================
+import tensorflow as tf
+
+
+
+print("TensorFlow 版本:", tf.__version__)
+
+print(" ",tf.__version__)
+
+print("GPU 可用:", len(tf.config.list_physical_devices("GPU")) > 0)
+
+
+
+# 最简单的张量运算
+
+a = tf.constant([1.0, 2.0, 3.0])
+
+b = tf.constant([4.0, 5.0, 6.0])
+
+print("a + b =", a + b)
+
+============================================================
+FILE: tensflaw/mediapipe_detect.py (10449 chars)
+============================================================
+"""
+
+第 8 课：MediaPipe 人脸 + 手势检测
+
+
+
+用法:
+
+  python mediapipe_detect.py                      # 示例图，人脸检测
+
+  python mediapipe_detect.py --mode face          # 仅人脸
+
+  python mediapipe_detect.py --mode hand          # 手部关键点 + 手指数
+
+  python mediapipe_detect.py --mode both          # 人脸 + 手
+
+  python mediapipe_detect.py --image 照片.jpg
+
+  python mediapipe_detect.py --camera             # 摄像头（按 q 退出）
+
+"""
+
+import argparse
+
+import os
+
+import sys
+
+import time
+
+import urllib.request
+
+
+
+import cv2
+
+import mediapipe as mp
+
+from mediapipe.tasks import python
+
+from mediapipe.tasks.python import vision
+
+
+
+BASE_DIR = os.path.dirname(__file__)
+
+IMAGES_DIR = os.path.join(BASE_DIR, "images")
+
+PICTURES_DIR = os.path.join(BASE_DIR, "pictures")
+
+MODELS_DIR = os.path.join(BASE_DIR, "models")
+
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+os.makedirs(PICTURES_DIR, exist_ok=True)
+
+os.makedirs(MODELS_DIR, exist_ok=True)
+
+
+
+SAMPLE_URL = "https://raw.githubusercontent.com/opencv/opencv/master/samples/data/lena.jpg"
+
+SAMPLE_PATH = os.path.join(IMAGES_DIR, "sample_lena.jpg")
+
+
+
+FACE_MODEL_URL = (
+
+    "https://storage.googleapis.com/mediapipe-models/face_detector/"
+
+    "blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
+
+)
+
+HAND_MODEL_URL = (
+
+    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/"
+
+    "hand_landmarker/float16/1/hand_landmarker.task"
+
+)
+
+FACE_MODEL_PATH = os.path.join(MODELS_DIR, "blaze_face_short_range.tflite")
+
+HAND_MODEL_PATH = os.path.join(MODELS_DIR, "hand_landmarker.task")
+
+
+
+FINGER_TIPS = [4, 8, 12, 16, 20]
+
+
+
+
+
+def download_if_missing(url, path):
+
+    if os.path.exists(path):
+
+        return path
+
+    print(f"下载: {url}")
+
+    urllib.request.urlretrieve(url, path)
+
+    return path
+
+
+
+
+
+def ensure_sample_image():
+
+    if os.path.exists(SAMPLE_PATH):
+
+        return SAMPLE_PATH
+
+    print(f"下载示例图: {SAMPLE_URL}")
+
+    urllib.request.urlretrieve(SAMPLE_URL, SAMPLE_PATH)
+
+    return SAMPLE_PATH
+
+
+
+
+
+def bgr_to_mp_image(bgr_image):
+
+    rgb = cv2.cvtColor(bgr_image, cv2.COLOR_BGR2RGB)
+
+    return mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+
+
+
+
+
+def create_face_detector(running_mode=vision.RunningMode.IMAGE):
+
+    download_if_missing(FACE_MODEL_URL, FACE_MODEL_PATH)
+
+    options = vision.FaceDetectorOptions(
+
+        base_options=python.BaseOptions(model_asset_path=FACE_MODEL_PATH),
+
+        running_mode=running_mode,
+
+        min_detection_confidence=0.5,
+
+    )
+
+    return vision.FaceDetector.create_from_options(options)
+
+
+
+
+
+def create_hand_landmarker(running_mode=vision.RunningMode.IMAGE):
+
+    download_if_missing(HAND_MODEL_URL, HAND_MODEL_PATH)
+
+    options = vision.HandLandmarkerOptions(
+
+        base_options=python.BaseOptions(model_asset_path=HAND_MODEL_PATH),
+
+        running_mode=running_mode,
+
+        num_hands=2,
+
+        min_hand_detection_confidence=0.5,
+
+        min_hand_presence_confidence=0.5,
+
+        min_tracking_confidence=0.5,
+
+    )
+
+    return vision.HandLandmarker.create_from_options(options)
+
+
+
+
+
+def draw_faces(image, detection_result):
+
+    for det in detection_result.detections:
+
+        bbox = det.bounding_box
+
+        x1, y1 = int(bbox.origin_x), int(bbox.origin_y)
+
+        x2, y2 = x1 + int(bbox.width), y1 + int(bbox.height)
+
+        cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        score = det.categories[0].score if det.categories else 0.0
+
+        cv2.putText(
+
+            image,
+
+            f"face {score:.2f}",
+
+            (x1, max(y1 - 8, 20)),
+
+            cv2.FONT_HERSHEY_SIMPLEX,
+
+            0.5,
+
+            (0, 255, 0),
+
+            1,
+
+            cv2.LINE_AA,
+
+        )
+
+    cv2.putText(
+
+        image,
+
+        f"faces: {len(detection_result.detections)}",
+
+        (10, 25),
+
+        cv2.FONT_HERSHEY_SIMPLEX,
+
+        0.7,
+
+        (0, 0, 255),
+
+        2,
+
+        cv2.LINE_AA,
+
+    )
+
+    return image
+
+
+
+
+
+def get_hand_label(handedness_list):
+
+    """MediaPipe 0.10+: handedness[i] 是 Category 列表，不是 .classification"""
+
+    if not handedness_list:
+
+        return "Unknown"
+
+    return handedness_list[0].category_name or "Unknown"
+
+
+
+
+
+def count_fingers(hand_landmarks, handedness_list):
+
+    lm = hand_landmarks
+
+    fingers = 0
+
+    is_left = get_hand_label(handedness_list) == "Left"
+
+
+
+    if is_left:
+
+        if lm[FINGER_TIPS[0]].x < lm[FINGER_TIPS[0] - 1].x:
+
+            fingers += 1
+
+    else:
+
+        if lm[FINGER_TIPS[0]].x > lm[FINGER_TIPS[0] - 1].x:
+
+            fingers += 1
+
+
+
+    for tip_id in FINGER_TIPS[1:]:
+
+        if lm[tip_id].y < lm[tip_id - 2].y:
+
+            fingers += 1
+
+    return fingers
+
+
+
+
+
+def draw_hands(image, hand_result):
+
+    h, w = image.shape[:2]
+
+    if not hand_result.hand_landmarks:
+
+        cv2.putText(
+
+            image, "hands: 0", (10, 50),
+
+            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2, cv2.LINE_AA,
+
+        )
+
+        return image
+
+
+
+    connections = [
+
+        (0, 1), (1, 2), (2, 3), (3, 4),
+
+        (0, 5), (5, 6), (6, 7), (7, 8),
+
+        (0, 9), (9, 10), (10, 11), (11, 12),
+
+        (0, 13), (13, 14), (14, 15), (15, 16),
+
+        (0, 17), (17, 18), (18, 19), (19, 20),
+
+    ]
+
+
+
+    for i, hand_landmarks in enumerate(hand_result.hand_landmarks):
+
+        for a, b in connections:
+
+            pa, pb = hand_landmarks[a], hand_landmarks[b]
+
+            cv2.line(
+
+                image,
+
+                (int(pa.x * w), int(pa.y * h)),
+
+                (int(pb.x * w), int(pb.y * h)),
+
+                (0, 165, 255),
+
+                2,
+
+            )
+
+        for lm in hand_landmarks:
+
+            cv2.circle(image, (int(lm.x * w), int(lm.y * h)), 3, (255, 0, 0), -1)
+
+
+
+        if i < len(hand_result.handedness):
+
+            handedness_list = hand_result.handedness[i]
+
+            label = get_hand_label(handedness_list)
+
+            fingers = count_fingers(hand_landmarks, handedness_list)
+
+            wrist = hand_landmarks[0]
+
+            cv2.putText(
+
+                image,
+
+                f"{label} {fingers} fingers",
+
+                (int(wrist.x * w), int(wrist.y * h) - 10),
+
+                cv2.FONT_HERSHEY_SIMPLEX,
+
+                0.6,
+
+                (0, 165, 255),
+
+                2,
+
+                cv2.LINE_AA,
+
+            )
+
+
+
+    cv2.putText(
+
+        image,
+
+        f"hands: {len(hand_result.hand_landmarks)}",
+
+        (10, 50),
+
+        cv2.FONT_HERSHEY_SIMPLEX,
+
+        0.7,
+
+        (255, 0, 0),
+
+        2,
+
+        cv2.LINE_AA,
+
+    )
+
+    return image
+
+
+
+
+
+def run_detectors(frame, mode, face_detector, hand_landmarker, timestamp_ms=0, is_video=False):
+
+    output = frame.copy()
+
+    mp_image = bgr_to_mp_image(frame)
+
+
+
+    if face_detector is not None:
+
+        if is_video:
+
+            face_result = face_detector.detect_for_video(mp_image, timestamp_ms)
+
+        else:
+
+            face_result = face_detector.detect(mp_image)
+
+        output = draw_faces(output, face_result)
+
+
+
+    if hand_landmarker is not None:
+
+        if is_video:
+
+            hand_result = hand_landmarker.detect_for_video(mp_image, timestamp_ms)
+
+        else:
+
+            hand_result = hand_landmarker.detect(mp_image)
+
+        output = draw_hands(output, hand_result)
+
+
+
+    return output
+
+
+
+
+
+def detect_image(image_path, mode, save_path=None, show=True):
+
+    frame = cv2.imread(image_path)
+
+    if frame is None:
+
+        raise FileNotFoundError(f"无法读取: {image_path}")
+
+
+
+    use_face = mode in ("face", "both")
+
+    use_hand = mode in ("hand", "both")
+
+
+
+    with create_face_detector() if use_face else _noop_context() as face_det, \
+
+         create_hand_landmarker() if use_hand else _noop_context() as hand_det:
+
+        output = run_detectors(
+
+            frame, mode,
+
+            face_det if use_face else None,
+
+            hand_det if use_hand else None,
+
+            is_video=False,
+
+        )
+
+
+
+    print(f"图片: {image_path}  模式: {mode}")
+
+    if save_path:
+
+        cv2.imwrite(save_path, output)
+
+        print(f"结果已保存: {save_path}")
+
+
+
+    if show:
+
+        cv2.imshow("MediaPipe", output)
+
+        print("按任意键关闭...")
+
+        cv
+
+... [truncated, total 10449 chars] ...
+
+============================================================
+FILE: tensflaw/mnist.py (2991 chars)
+============================================================
+import os
+
+
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+
+
+import matplotlib.pyplot as plt
+
+import tensorflow as tf
+
+from tensorflow import keras
+
+
+
+plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+
+plt.rcParams["axes.unicode_minus"] = False
+
+
+
+# 1. 加载 MNIST 数据集（首次运行会自动下载）
+
+(x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
+
+
+
+# 像素值 0~255 归一化到 0~1，并增加通道维度 (28, 28) -> (28, 28, 1)
+
+x_train = x_train.astype("float32") / 255.0
+
+x_test = x_test.astype("float32") / 255.0
+
+print(x_train.shape)
+
+print(x_test.shape)
+
+x_train = x_train[..., tf.newaxis]
+
+x_test = x_test[..., tf.newaxis]
+
+print(x_train.shape)
+
+print(x_test.shape)
+
+
+
+print(f"训练集: {x_train.shape}, 测试集: {x_test.shape}")
+
+
+
+# 2. 构建模型
+
+model = keras.Sequential(
+
+    [
+
+        keras.layers.Input(shape=(28, 28, 1)),
+
+        keras.layers.Conv2D(32, 3, activation="relu", name="conv1"),
+
+        keras.layers.MaxPooling2D(name="pool1"),
+
+        keras.layers.Conv2D(64, 3, activation="relu", name="conv2"),
+
+        keras.layers.MaxPooling2D(name="pool2"),
+
+        keras.layers.Flatten(),
+
+        keras.layers.Dense(64, activation="relu"),
+
+        keras.layers.Dense(10, activation="softmax"),
+
+    ]
+
+)
+
+
+
+model.compile(
+
+    optimizer="adam",
+
+    loss="sparse_categorical_crossentropy",
+
+    metrics=["accuracy"],
+
+)
+
+
+
+model.summary()
+
+
+
+# 3. 训练
+
+print("\n开始训练...")
+
+history = model.fit(
+
+    x_train,
+
+    y_train,
+
+    epochs=3,
+
+    batch_size=128,
+
+    validation_split=0.1,
+
+    verbose=1,
+
+)
+
+
+
+# 4. 测试集评估
+
+test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
+
+print(f"\n测试集准确率: {test_acc:.4f}")
+
+
+
+model_path = os.path.join(os.path.dirname(__file__), "mnist_model.keras")
+
+model.save(model_path)
+
+print(f"模型已保存: {model_path}")
+
+
+
+# 5. 绘制训练曲线
+
+# print(history.history["loss"])
+
+epochs_range = range(1, len(history.history["loss"]) + 1)
+
+
+
+fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+
+
+axes[0].plot(epochs_range, history.history["loss"], "b-o", label="训练 loss")
+
+axes[0].plot(epochs_range, history.history["val_loss"], "r-o", label="验证 loss")
+
+axes[0].set_title("Loss 变化")
+
+axes[0].set_xlabel("Epoch")
+
+axes[0].set_ylabel("Loss")
+
+axes[0].legend()
+
+axes[0].grid(True, alpha=0.3)
+
+
+
+axes[1].plot(epochs_range, history.history["accuracy"], "b-o", label="训练 accuracy")
+
+axes[1].plot(epochs_range, history.history["val_accuracy"], "r-o", label="验证 accuracy")
+
+axes[1].set_title("Accuracy 变化")
+
+axes[1].set_xlabel("Epoch")
+
+axes[1].set_ylabel("Accuracy")
+
+axes[1].legend()
+
+axes[1].grid(True, alpha=0.3)
+
+
+
+plt.tight_layout()
+
+pictures_dir = os.path.join(os.path.dirname(__file__), "pictures")
+
+os.makedirs(pictures_dir, exist_ok=True)
+
+plot_path = os.path.join(pictures_dir, "training_history.png")
+
+plt.savefig(plot_path, dpi=150)
+
+print(f"\n训练曲线已保存: {plot_path}")
+
+plt.show()
+
+
+
+# 6. 看几个预测结果
+
+predictions = model.predict(x_test[:5], verbose=0)
+
+for i in range(5):
+
+    pred = int(tf.argmax(predictions[i]))
+
+    print(f"样本 {i}: 真实={y_test[i]}, 预测={pred}")
+
+
+
+============================================================
+FILE: tensflaw/mnist_custom_train.py (5716 chars)
+============================================================
+"""
+
+第 5 课：自定义训练循环（GradientTape）
+
+不用 model.fit，手写 train_step，理解 model.fit 内部在做什么。
+
+"""
+
+import os
+
+
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+
+
+import matplotlib.pyplot as plt
+
+import tensorflow as tf
+
+from tensorflow import keras
+
+
+
+plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+
+plt.rcParams["axes.unicode_minus"] = False
+
+
+
+BASE_DIR = os.path.dirname(__file__)
+
+PICTURES_DIR = os.path.join(BASE_DIR, "pictures")
+
+os.makedirs(PICTURES_DIR, exist_ok=True)
+
+
+
+EPOCHS = 3
+
+BATCH_SIZE = 128
+
+LEARNING_RATE = 1e-3
+
+
+
+
+
+def load_datasets():
+
+    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
+
+    x_train = (x_train.astype("float32") / 255.0)[..., tf.newaxis]
+
+    x_test = (x_test.astype("float32") / 255.0)[..., tf.newaxis]
+
+
+
+    # 从训练集末尾切 10% 做验证集（与 validation_split=0.1 一致）
+
+    val_size = int(len(x_train) * 0.1)
+
+    print("val_size:  3",val_size)
+
+    x_val, y_val = x_train[-val_size:], y_train[-val_size:]
+
+    x_train, y_train = x_train[:-val_size], y_train[:-val_size]
+
+
+
+    train_ds = (
+
+        tf.data.Dataset.from_tensor_slices((x_train, y_train))
+
+        .shuffle(10000)
+
+        .batch(BATCH_SIZE)
+
+        .prefetch(tf.data.AUTOTUNE)
+
+    )
+
+    val_ds = (
+
+        tf.data.Dataset.from_tensor_slices((x_val, y_val))
+
+        .batch(BATCH_SIZE)
+
+        .prefetch(tf.data.AUTOTUNE)
+
+    )
+
+    test_ds = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(BATCH_SIZE)
+
+    return train_ds, val_ds, test_ds
+
+
+
+
+
+def build_model():
+
+    return keras.Sequential(
+
+        [
+
+            keras.layers.Input(shape=(28, 28, 1)),
+
+            keras.layers.Conv2D(32, 3, activation="relu"),
+
+            keras.layers.MaxPooling2D(),
+
+            keras.layers.Conv2D(64, 3, activation="relu"),
+
+            keras.layers.MaxPooling2D(),
+
+            keras.layers.Flatten(),
+
+            keras.layers.Dense(64, activation="relu"),
+
+            keras.layers.Dense(10, activation="softmax"),
+
+        ]
+
+    )
+
+
+
+
+
+def main():
+
+    train_ds, val_ds, test_ds = load_datasets()
+
+    model = build_model()
+
+
+
+    # 优化器、损失、指标 — 等价于 model.compile(...) 里的配置
+
+    optimizer = keras.optimizers.Adam(learning_rate=LEARNING_RATE)
+
+    loss_fn = keras.losses.SparseCategoricalCrossentropy()
+
+    train_loss = keras.metrics.Mean(name="train_loss")
+
+    train_acc = keras.metrics.SparseCategoricalAccuracy(name="train_acc")
+
+    val_loss = keras.metrics.Mean(name="val_loss")
+
+    val_acc = keras.metrics.SparseCategoricalAccuracy(name="val_acc")
+
+
+
+    # ── 核心：一个 batch 的训练步骤 ──
+
+    @tf.function
+
+    def train_step(x, y):
+
+        with tf.GradientTape() as tape:
+
+            preds = model(x, training=True)          # 前向传播
+
+            loss = loss_fn(y, preds)                 # 计算 loss
+
+
+
+        grads = tape.gradient(loss, model.trainable_variables)  # 反向传播
+
+        optimizer.apply_gradients(                  # 更新权重
+
+            zip(grads, model.trainable_variables)
+
+        )
+
+
+
+        train_loss.update_state(loss)
+
+        train_acc.update_state(y, preds)
+
+        return loss
+
+
+
+    # 验证步骤：只前向，不更新权重
+
+    @tf.function
+
+    def val_step(x, y):
+
+        preds = model(x, training=False)
+
+        loss = loss_fn(y, preds)
+
+        val_loss.update_state(loss)
+
+        val_acc.update_state(y, preds)
+
+
+
+    history = {"loss": [], "accuracy": [], "val_loss": [], "val_accuracy": []}
+
+
+
+    print("开始自定义训练循环...\n")
+
+    for epoch in range(EPOCHS):
+
+        # 每个 epoch 开始前重置指标
+
+        train_loss.reset_state()
+
+        train_acc.reset_state()
+
+        val_loss.reset_state()
+
+        val_acc.reset_state()
+
+
+
+        # 训练阶段
+
+        for batch_x, batch_y in train_ds:
+
+            train_step(batch_x, batch_y)
+
+
+
+        # 验证阶段
+
+        for batch_x, batch_y in val_ds:
+
+            val_step(batch_x, batch_y)
+
+
+
+        tl, ta = float(train_loss.result()), float(train_acc.result())
+
+        vl, va = float(val_loss.result()), float(val_acc.result())
+
+        history["loss"].append(tl)
+
+        history["accuracy"].append(ta)
+
+        history["val_loss"].append(vl)
+
+        history["val_accuracy"].append(va)
+
+
+
+        print(
+
+            f"Epoch {epoch + 1}/{EPOCHS}  "
+
+            f"loss={tl:.4f}  acc={ta:.4f}  "
+
+            f"val_loss={vl:.4f}  val_acc={va:.4f}"
+
+        )
+
+
+
+    # 测试集评估（同样用手写循环）
+
+    test_loss = keras.metrics.Mean(name="test_loss")
+
+    test_acc = keras.metrics.SparseCategoricalAccuracy(name="test_acc")
+
+    for batch_x, batch_y in test_ds:
+
+        preds = model(batch_x, training=False)
+
+        test_loss.update_state(loss_fn(batch_y, preds))
+
+        test_acc.update_state(batch_y, preds)
+
+
+
+    print(f"\n测试集  loss={float(test_loss.result()):.4f}  acc={float(test_acc.result()):.4f}")
+
+
+
+    # 绘制曲线
+
+    epochs_range = range(1, EPOCHS + 1)
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+    axes[0].plot(epochs_range, history["loss"], "b-o", label="训练")
+
+    axes[0].plot(epochs_range, history["val_loss"], "r-o", label="验证")
+
+    axes[0].set_title("Loss")
+
+    axes[0].legend()
+
+    axes[0].grid(True, alpha=0.3)
+
+
+
+    axes[1].plot(epochs_range, history["accuracy"], "b-o", label="训练")
+
+    axes[1].plot(epochs_range, history["val_accuracy"], "r-o", label="验证")
+
+    axes[1].set_title("Accuracy")
+
+    axes[1].legend()
+
+    axes[1].grid(True, alpha=0.3)
+
+
+
+    plt.tight_layout()
+
+    path = os.path.join(PICTURES_DIR, "custom_train_history.png")
+
+    plt.savefig(path, dpi=150)
+
+    print(f"训练曲线已保存: {path}")
+
+    plt.show()
+
+
+
+    print("\n对照理解 model.fit 内部:")
+
+    print("  model.fit(...)  ≈  for epoch: for batch: train_step(...)")
+
+    print("  model.compile   ≈  定义 optimizer + loss_fn + metrics")
+
+    print("  @tf.function    ≈  把 Python 循环编译成图，加速训练")
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+
+
+
+============================================================
+FILE: tensflaw/mnist_deep_dive.py (7204 chars)
+============================================================
+"""
+
+MNIST 深入学习：交叉熵梯度、卷积核、特征图、错分样本
+
+先运行 mnist.py 生成 mnist_model.keras，或本脚本会自动训练。
+
+"""
+
+import os
+
+
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+
+
+import matplotlib.pyplot as plt
+
+import numpy as np
+
+import tensorflow as tf
+
+from tensorflow import keras
+
+
+
+plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+
+plt.rcParams["axes.unicode_minus"] = False
+
+
+
+BASE_DIR = os.path.dirname(__file__)
+
+MODEL_PATH = os.path.join(BASE_DIR, "mnist_model.keras")
+
+PICTURES_DIR = os.path.join(BASE_DIR, "pictures")
+
+os.makedirs(PICTURES_DIR, exist_ok=True)
+
+
+
+
+
+def build_model():
+
+    return keras.Sequential(
+
+        [
+
+            keras.layers.Input(shape=(28, 28, 1)),
+
+            keras.layers.Conv2D(32, 3, activation="relu", name="conv1"),
+
+            keras.layers.MaxPooling2D(name="pool1"),
+
+            keras.layers.Conv2D(64, 3, activation="relu", name="conv2"),
+
+            keras.layers.MaxPooling2D(name="pool2"),
+
+            keras.layers.Flatten(),
+
+            keras.layers.Dense(64, activation="relu"),
+
+            keras.layers.Dense(10, activation="softmax"),
+
+        ]
+
+    )
+
+
+
+
+
+def load_or_train_model():
+
+    if os.path.exists(MODEL_PATH):
+
+        print(f"加载已训练模型: {MODEL_PATH}")
+
+        return keras.models.load_model(MODEL_PATH)
+
+
+
+    print("未找到模型，快速训练 3 个 epoch...")
+
+    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
+
+    x_train = (x_train.astype("float32") / 255.0)[..., tf.newaxis]
+
+    x_test = (x_test.astype("float32") / 255.0)[..., tf.newaxis]
+
+
+
+    model = build_model()
+
+    model.compile(
+
+        optimizer="adam",
+
+        loss="sparse_categorical_crossentropy",
+
+        metrics=["accuracy"],
+
+    )
+
+    model.fit(x_train, y_train, epochs=3, batch_size=128, validation_split=0.1, verbose=1)
+
+    model.save(MODEL_PATH)
+
+    return model
+
+
+
+
+
+def demo_cross_entropy_gradient():
+
+    """演示 softmax + 交叉熵 时，输出层梯度 = 预测概率 - 真实标签"""
+
+    print("\n" + "=" * 60)
+
+    print("【1】交叉熵 + Softmax 的梯度（输出层）")
+
+    print("=" * 60)
+
+
+
+    logits = tf.Variable([2.0, 1.0, 0.1, -0.5, -1.0, -2.0, -3.0, -4.0, -5.0, -6.0])
+
+    true_label = 3
+
+
+
+    with tf.GradientTape() as tape:
+
+        probs = tf.nn.softmax(logits)
+
+        loss = tf.keras.losses.sparse_categorical_crossentropy(
+
+            tf.constant([true_label], dtype=tf.int32),
+
+            probs[tf.newaxis, :],
+
+            from_logits=False,
+
+        )
+
+
+
+    grad = tape.gradient(loss, logits)
+
+    one_hot = tf.one_hot(true_label, 10)
+
+
+
+    print(f"真实标签: {true_label}")
+
+    print(f"Softmax 概率: {np.round(probs.numpy(), 4)}")
+
+    print(f"Loss: {float(np.asarray(loss).reshape(-1)[0]):.4f}")
+
+    print(f"梯度 d(loss)/d(logits) = 预测 - one_hot:")
+
+    print(f"  手算: {np.round((probs - one_hot).numpy(), 4)}")
+
+    print(f"  Tape: {np.round(grad.numpy(), 4)}")
+
+    print("\n解读:")
+
+    print("  - 真实类别(3)的梯度为负 → 增大 logit[3] 可降低 loss")
+
+    print("  - 错误类别梯度为正 → 减小它们的 logit 可降低 loss")
+
+    print("  - 这就是反向传播在最后一层的具体形态")
+
+
+
+
+
+def plot_conv_kernels(model, save_path):
+
+    """第一层 32 个 3x3 卷积核"""
+
+    conv1 = model.get_layer("conv1")
+
+    kernels = conv1.get_weights()[0]  # shape: (3, 3, 1, 32)
+
+
+
+    fig, axes = plt.subplots(4, 8, figsize=(10, 5))
+
+    for i, ax in enumerate(axes.flat):
+
+        ax.imshow(kernels[:, :, 0, i], cmap="viridis")
+
+        ax.set_title(f"#{i}", fontsize=8)
+
+        ax.axis("off")
+
+    fig.suptitle("第一层卷积核 (3×3) — 训练后学到的局部检测器", fontsize=12)
+
+    plt.tight_layout()
+
+    plt.savefig(save_path, dpi=150)
+
+    print(f"卷积核图已保存: {save_path}")
+
+    plt.close()
+
+
+
+
+
+def get_intermediate_outputs(model, image, layer_names):
+
+    """逐层前向，提取指定层的输出（兼容 Keras 3 Sequential）"""
+
+    outputs = {}
+
+    x = tf.constant(image[tf.newaxis, ...])
+
+    for layer in model.layers:
+
+        x = layer(x)
+
+        if layer.name in layer_names:
+
+            outputs[layer.name] = x[0].numpy()
+
+    return outputs
+
+
+
+
+
+def plot_feature_maps(model, image, save_path):
+
+    """对一张图，展示 conv1 / conv2 各通道的激活图"""
+
+    feats = get_intermediate_outputs(model, image, ["conv1", "pool1", "conv2"])
+
+    f1 = feats["conv1"]    # (26, 26, 32)
+
+    f1p = feats["pool1"]   # (13, 13, 32)
+
+    f2 = feats["conv2"]    # (11, 11, 64)
+
+
+
+    fig = plt.figure(figsize=(14, 8))
+
+    ax0 = fig.add_subplot(2, 3, 1)
+
+    ax0.imshow(image[:, :, 0], cmap="gray")
+
+    ax0.set_title("原图")
+
+    ax0.axis("off")
+
+
+
+    def show_grid(maps, ax, title, n_show=16):
+
+        n = min(n_show, maps.shape[-1])
+
+        cols = 4
+
+        rows = (n + cols - 1) // cols
+
+        mosaic = np.zeros((rows * maps.shape[0], cols * maps.shape[1]))
+
+        for i in range(n):
+
+            r, c = divmod(i, cols)
+
+            mosaic[
+
+                r * maps.shape[0] : (r + 1) * maps.shape[0],
+
+                c * maps.shape[1] : (c + 1) * maps.shape[1],
+
+            ] = maps[:, :, i]
+
+        ax.imshow(mosaic, cmap="hot")
+
+        ax.set_title(title)
+
+        ax.axis("off")
+
+
+
+    show_grid(f1, fig.add_subplot(2, 3, 2), "Conv1 特征图 (前16通道)")
+
+    show_grid(f1p, fig.add_subplot(2, 3, 3), "Pool1 后 (前16通道)")
+
+    show_grid(f2, fig.add_subplot(2, 3, 5), "Conv2 特征图 (前16通道)")
+
+
+
+    ax_txt = fig.add_subplot(2, 3, 4)
+
+    ax_txt.axis("off")
+
+    ax_txt.text(
+
+        0.05,
+
+        0.6,
+
+        "亮色区域 = 该卷积核\n对图像有强响应\n\n越深层的特征图\n越抽象（笔画组合）",
+
+        fontsize=11,
+
+        va="top",
+
+    )
+
+
+
+    plt.tight_layout()
+
+    plt.savefig(save_path, dpi=150)
+
+    print(f"特征图已保存: {save_path}")
+
+    plt.close()
+
+
+
+
+
+def plot_misclassified(model, x_test, y_test, save_path, max_show=12):
+
+    """展示预测错误的样本"""
+
+    preds = model.predict(x_test, verbose=0)
+
+    pred_labels = np.argmax(preds, axis=1)
+
+    wrong_idx = np.where(pred_labels != y_test)[0]
+
+
+
+    print(f"\n测试集错分数量: {len(wrong_idx)} / {len(y_test)}")
+
+
+
+    if len(wrong_idx) == 0:
+
+        return
+
+
+
+    show_n = min(max_show, len(wrong_idx))
+
+    cols = 4
+
+    rows = (show_n + cols - 1) // cols
+
+    fig, axes = plt.subplots(rows, cols, figsize=(10, 2.5 * rows))
+
+    for i, ax in enumerate(np.ravel(axes)):
+
+        if i >= show_n:
+
+            ax.axis("off")
+
+            continue
+
+        idx = wrong_idx[i]
+
+        ax.imshow(x_test[idx, :, :, 0], cmap="gray")
+
+        conf = preds[idx][pred_labels[idx]]
+
+        ax.set_title(
+
+            f"真:{y_test[idx]} 预:{pred_labels[idx]}\n置信:{conf:.2f}",
+
+            fontsize=9,
+
+            color="red",
+
+        )
+
+        ax.axis("off")
+
+    fig.suptitle("错分样本 — 观察哪些数字容易混淆", fontsize=12)
+
+    plt.tight_layout()
+
+    plt.savefig(save_path, dpi=150)
+
+    print(f"错分样本图已保存: {save_path}")
+
+    plt.close()
+
+
+
+
+
+def main():
+
+    demo_cross_entropy_gradient()
+
+
+
+    model = load_or_train_model()
+
+
+
+    (_, _), (x_test, y_test) = keras.datasets.mnist.load_data()
+
+    x_test = (x_test.astype("float32") / 255.0)[..., tf.newaxis]
+
+
+
+    plot_conv_kernels(model, os.path.join(PICTURES_DIR, "conv_kernels.png"))
+
+    plot_feature_maps(model, x_test[0], os.path.join(PICTURES_DIR, "feature_maps.png"))
+
+    plot_misclassified(model, x_test, y_test, os.path.join(PICTURES_DIR, "misclassified.png"))
+
+
+
+    print("\n全部完成。请打开以下图片:")
+
+    print("  - conv_kernels.png   卷积核")
+
+    print("  - feature_maps.png   特征图")
+
+    print("  - misclassified.png  错分样本")
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+
+
+
+============================================================
+FILE: tensflaw/mnist_dropout.py (4203 chars)
+============================================================
+"""
+
+第 3 课：Dropout 正则化 + EarlyStopping
+
+对比「无 Dropout」与「有 Dropout」在长训练下的过拟合差异。
+
+"""
+
+import os
+
+
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+
+
+import matplotlib.pyplot as plt
+
+import tensorflow as tf
+
+from tensorflow import keras
+
+
+
+plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+
+plt.rcParams["axes.unicode_minus"] = False
+
+
+
+BASE_DIR = os.path.dirname(__file__)
+
+PICTURES_DIR = os.path.join(BASE_DIR, "pictures")
+
+os.makedirs(PICTURES_DIR, exist_ok=True)
+
+
+
+
+
+def load_data():
+
+    (x_train, y_train), (x_test, y_test) = keras.datasets.mnist.load_data()
+
+    x_train = (x_train.astype("float32") / 255.0)[..., tf.newaxis]
+
+    x_test = (x_test.astype("float32") / 255.0)[..., tf.newaxis]
+
+    return x_train, y_train, x_test, y_test
+
+
+
+
+
+def build_model(use_dropout=False):
+
+    layers = [
+
+        keras.layers.Input(shape=(28, 28, 1)),
+
+        keras.layers.Conv2D(32, 3, activation="relu"),
+
+        keras.layers.MaxPooling2D(),
+
+        keras.layers.Conv2D(64, 3, activation="relu"),
+
+        keras.layers.MaxPooling2D(),
+
+        keras.layers.Flatten(),
+
+        keras.layers.Dense(128, activation="relu"),
+
+    ]
+
+    if use_dropout:
+
+        layers.append(keras.layers.Dropout(0.5))
+
+    layers.append(keras.layers.Dense(10, activation="softmax"))
+
+    return keras.Sequential(layers)
+
+
+
+
+
+def train_and_evaluate(name, use_dropout, x_train, y_train, x_test, y_test, epochs=12):
+
+    print(f"\n{'=' * 50}\n训练模型: {name}\n{'=' * 50}")
+
+    model = build_model(use_dropout=use_dropout)
+
+    model.compile(
+
+        optimizer="adam",
+
+        loss="sparse_categorical_crossentropy",
+
+        metrics=["accuracy"],
+
+    )
+
+
+
+    callbacks = [
+
+        keras.callbacks.EarlyStopping(
+
+            monitor="val_loss",
+
+            patience=3,
+
+            restore_best_weights=True,
+
+            verbose=1,
+
+        )
+
+    ]
+
+
+
+    history = model.fit(
+
+        x_train,
+
+        y_train,
+
+        epochs=epochs,
+
+        batch_size=128,
+
+        validation_split=0.1,
+
+        callbacks=callbacks,
+
+        verbose=1,
+
+    )
+
+
+
+    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
+
+    print(f"{name} 测试集准确率: {test_acc:.4f}")
+
+    return history
+
+
+
+
+
+def plot_comparison(hist_baseline, hist_dropout):
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    epochs_b = range(1, len(hist_baseline.history["loss"]) + 1)
+
+    epochs_d = range(1, len(hist_dropout.history["loss"]) + 1)
+
+
+
+    axes[0].plot(epochs_b, hist_baseline.history["loss"], "b-o", label="无 Dropout 训练")
+
+    axes[0].plot(epochs_b, hist_baseline.history["val_loss"], "b--o", label="无 Dropout 验证")
+
+    axes[0].plot(epochs_d, hist_dropout.history["loss"], "r-s", label="有 Dropout 训练")
+
+    axes[0].plot(epochs_d, hist_dropout.history["val_loss"], "r--s", label="有 Dropout 验证")
+
+    axes[0].set_title("Loss：过拟合时验证 loss 会回升")
+
+    axes[0].set_xlabel("Epoch")
+
+    axes[0].legend(fontsize=8)
+
+    axes[0].grid(True, alpha=0.3)
+
+
+
+    axes[1].plot(epochs_b, hist_baseline.history["accuracy"], "b-o", label="无 Dropout 训练")
+
+    axes[1].plot(epochs_b, hist_baseline.history["val_accuracy"], "b--o", label="无 Dropout 验证")
+
+    axes[1].plot(epochs_d, hist_dropout.history["accuracy"], "r-s", label="有 Dropout 训练")
+
+    axes[1].plot(epochs_d, hist_dropout.history["val_accuracy"], "r--s", label="有 Dropout 验证")
+
+    axes[1].set_title("Accuracy：训练与验证的差距")
+
+    axes[1].set_xlabel("Epoch")
+
+    axes[1].legend(fontsize=8)
+
+    axes[1].grid(True, alpha=0.3)
+
+
+
+    plt.tight_layout()
+
+    path = os.path.join(PICTURES_DIR, "dropout_comparison.png")
+
+    plt.savefig(path, dpi=150)
+
+    print(f"\n对比图已保存: {path}")
+
+    plt.show()
+
+
+
+
+
+def main():
+
+    x_train, y_train, x_test, y_test = load_data()
+
+
+
+    hist_base = train_and_evaluate(
+
+        "基线（无 Dropout）", False, x_train, y_train, x_test, y_test
+
+    )
+
+    hist_drop = train_and_evaluate(
+
+        "Dropout 版", True, x_train, y_train, x_test, y_test
+
+    )
+
+    plot_comparison(hist_base, hist_drop)
+
+
+
+    print("\n观察要点:")
+
+    print("  1. 无 Dropout：训练 acc 持续升，验证 acc 可能停滞或下降 → 过拟合")
+
+    print("  2. Dropout：训练 acc 略低，但验证 acc 更稳、测试集往往更好")
+
+    print("  3. EarlyStopping：验证 loss 不再下降时自动停训，避免白跑")
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+
+
+BINARY: tensflaw/mnist_model.keras (1500585 bytes)
+
+============================================================
+FILE: tensflaw/predict_digit.py (4599 chars)
+============================================================
+"""
+
+第 4 课：模型推理 — 加载已训练模型，对单张/多张图片预测
+
+用法:
+
+  python predict_digit.py              # 预测测试集随机 6 张
+
+  python predict_digit.py 图片路径.png  # 预测你自己的图
+
+把图片放到 images/ 目录也可批量预测。
+
+"""
+
+import os
+
+import sys
+
+
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+
+
+import matplotlib.pyplot as plt
+
+import numpy as np
+
+import tensorflow as tf
+
+from tensorflow import keras
+
+
+
+plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+
+plt.rcParams["axes.unicode_minus"] = False
+
+
+
+BASE_DIR = os.path.dirname(__file__)
+
+MODEL_PATH = os.path.join(BASE_DIR, "mnist_model.keras")
+
+PICTURES_DIR = os.path.join(BASE_DIR, "pictures")
+
+IMAGES_DIR = os.path.join(BASE_DIR, "images")
+
+os.makedirs(PICTURES_DIR, exist_ok=True)
+
+os.makedirs(IMAGES_DIR, exist_ok=True)
+
+
+
+
+
+def load_model():
+
+    if not os.path.exists(MODEL_PATH):
+
+        raise FileNotFoundError(
+
+            f"未找到模型 {MODEL_PATH}\n请先运行: python mnist.py"
+
+        )
+
+    return keras.models.load_model(MODEL_PATH)
+
+
+
+
+
+def preprocess_for_mnist(img_array):
+
+    """
+
+    转为 MNIST 格式：28x28 灰度，白字黑底，值域 0~1。
+
+    img_array: 2D numpy，任意尺寸。
+
+    """
+
+    img = tf.image.resize(img_array[..., np.newaxis], (28, 28))
+
+    img = img.numpy().squeeze()
+
+
+
+    # 归一化到 0~1
+
+    if img.max() > 1.0:
+
+        img = img / 255.0
+
+
+
+    # 常见扫描图是黑字白底，MNIST 是白字黑底 → 自动反转
+
+    if img.mean() > 0.5:
+
+        img = 1.0 - img
+
+
+
+    return img.astype("float32")
+
+
+
+
+
+def load_image_file(path):
+
+    try:
+
+        from PIL import Image
+
+    except ImportError:
+
+        raise ImportError("需要 Pillow: pip install pillow")
+
+
+
+    raw = np.array(Image.open(path).convert("L"), dtype=np.float32)
+
+    processed = preprocess_for_mnist(raw)
+
+    return raw, processed
+
+
+
+
+
+def predict_one(model, image_28x28):
+
+    x = image_28x28[np.newaxis, ..., np.newaxis]
+
+    probs = model.predict(x, verbose=0)[0]
+
+    pred = int(np.argmax(probs))
+
+    return pred, probs
+
+
+
+
+
+def show_prediction(raw_or_proc, pred, probs, title="", save_path=None):
+
+    fig, axes = plt.subplots(1, 2, figsize=(8, 3))
+
+
+
+    axes[0].imshow(raw_or_proc, cmap="gray")
+
+    axes[0].set_title(title or "输入")
+
+    axes[0].axis("off")
+
+
+
+    axes[1].bar(range(10), probs, color="steelblue")
+
+    axes[1].set_xticks(range(10))
+
+    axes[1].set_ylim(0, 1)
+
+    axes[1].set_title(f"预测: {pred}  (置信度 {probs[pred]:.2%})")
+
+    axes[1].axvline(pred, color="red", linestyle="--", alpha=0.7)
+
+
+
+    plt.tight_layout()
+
+    if save_path:
+
+        plt.savefig(save_path, dpi=150)
+
+        print(f"结果图已保存: {save_path}")
+
+    plt.show()
+
+
+
+
+
+def predict_test_samples(model, n=6):
+
+    (_, _), (x_test, y_test) = keras.datasets.mnist.load_data()
+
+    x_test = x_test.astype("float32") / 255.0
+
+
+
+    indices = np.random.choice(len(x_test), n, replace=False)
+
+    fig, axes = plt.subplots(2, 3, figsize=(9, 6))
+
+    for ax, idx in zip(axes.flat, indices):
+
+        img = x_test[idx]
+
+        pred, probs = predict_one(model, img)
+
+        ax.imshow(img, cmap="gray")
+
+        ax.set_title(f"真:{y_test[idx]} 预:{pred} ({probs[pred]:.0%})")
+
+        ax.axis("off")
+
+    fig.suptitle("测试集随机样本预测", fontsize=12)
+
+    plt.tight_layout()
+
+    path = os.path.join(PICTURES_DIR, "predict_samples.png")
+
+    plt.savefig(path, dpi=150)
+
+    print(f"批量预测图已保存: {path}")
+
+    plt.show()
+
+
+
+
+
+def predict_path(model, path):
+
+    raw, processed = load_image_file(path)
+
+    pred, probs = predict_one(model, processed)
+
+    print(f"文件: {path}")
+
+    print(f"预测数字: {pred}")
+
+    print("各类概率:", np.round(probs, 3))
+
+    save_path = os.path.join(PICTURES_DIR, "predict_custom.png")
+
+    show_prediction(processed, pred, probs, title=os.path.basename(path), save_path=save_path)
+
+
+
+
+
+def predict_images_folder(model):
+
+    exts = {".png", ".jpg", ".jpeg", ".bmp", ".gif"}
+
+    files = [
+
+        os.path.join(IMAGES_DIR, f)
+
+        for f in os.listdir(IMAGES_DIR)
+
+        if os.path.splitext(f.lower())[1] in exts
+
+    ]
+
+    if not files:
+
+        print(f"images/ 目录为空，可放入手写数字图片: {IMAGES_DIR}")
+
+        return
+
+    for path in sorted(files):
+
+        predict_path(model, path)
+
+
+
+
+
+def main():
+
+    model = load_model()
+
+    print(f"已加载模型: {MODEL_PATH}\n")
+
+
+
+    if len(sys.argv) > 1:
+
+        for path in sys.argv[1:]:
+
+            predict_path(model, path)
+
+    elif any(
+
+        os.path.splitext(f.lower())[1] in {".png", ".jpg", ".jpeg", ".bmp"}
+
+        for f in os.listdir(IMAGES_DIR)
+
+    ):
+
+        predict_images_folder(model)
+
+    else:
+
+        predict_test_samples(model)
+
+        print(f"\n提示: 把手写数字图放到 {IMAGES_DIR} 再运行本脚本")
+
+        print("或: python predict_digit.py 你的图片.png")
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+
+
+
+============================================================
+FILE: tensflaw/transfer_learning.py (6174 chars)
+============================================================
+"""
+
+第 6 课：迁移学习（Transfer Learning）
+
+用 ImageNet 预训练的 MobileNetV2，在 CIFAR-10 上微调。
+
+"""
+
+import os
+
+
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
+
+
+
+import matplotlib.pyplot as plt
+
+import numpy as np
+
+import tensorflow as tf
+
+from tensorflow import keras
+
+
+
+plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "DejaVu Sans"]
+
+plt.rcParams["axes.unicode_minus"] = False
+
+
+
+BASE_DIR = os.path.dirname(__file__)
+
+PICTURES_DIR = os.path.join(BASE_DIR, "pictures")
+
+os.makedirs(PICTURES_DIR, exist_ok=True)
+
+
+
+IMG_SIZE = 96          # 比 224 小，CPU 更快
+
+BATCH_SIZE = 64
+
+EPOCHS_HEAD = 5        # 阶段 1：只训练分类头
+
+EPOCHS_FINE = 3        # 阶段 2：微调预训练层
+
+MAX_TRAIN = 10000      # 子集加速（全量 50000 太慢）
+
+CLASS_NAMES = [
+
+    "飞机", "汽车", "鸟", "猫", "鹿",
+
+    "狗", "蛙", "马", "船", "卡车",
+
+]
+
+
+
+
+
+def load_cifar10_datasets():
+
+    (x_train, y_train), (x_test, y_test) = keras.datasets.cifar10.load_data()
+
+    y_train, y_test = y_train.flatten(), y_test.flatten()
+
+
+
+    # 取子集 + 划分验证集
+
+    x_train, y_train = x_train[:MAX_TRAIN], y_train[:MAX_TRAIN]
+
+    val_size = int(len(x_train) * 0.1)
+
+    
+
+    x_val, y_val = x_train[-val_size:], y_train[-val_size:]
+
+    x_train, y_train = x_train[:-val_size], y_train[:-val_size]
+
+
+
+    def make_ds(x, y, shuffle=False):
+
+        ds = tf.data.Dataset.from_tensor_slices((x, y))
+
+        if shuffle:
+
+            ds = ds.shuffle(2000)
+
+        return ds.batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
+
+
+
+    return make_ds(x_train, y_train, True), make_ds(x_val, y_val), make_ds(x_test, y_test)
+
+
+
+
+
+def preprocess(image, label):
+
+    """resize + MobileNetV2 标准预处理"""
+
+    image = tf.cast(image, tf.float32)
+
+    image = tf.image.resize(image, (IMG_SIZE, IMG_SIZE))
+
+    image = keras.applications.mobilenet_v2.preprocess_input(image)
+
+    return image, label
+
+
+
+
+
+def build_model(trainable_base=False):
+
+    base = keras.applications.MobileNetV2(
+
+        input_shape=(IMG_SIZE, IMG_SIZE, 3),
+
+        include_top=False,
+
+        weights="imagenet",
+
+    )
+
+    base.trainable = trainable_base
+
+
+
+    inputs = keras.Input(shape=(IMG_SIZE, IMG_SIZE, 3))
+
+    x = base(inputs, training=False)
+
+    x = keras.layers.GlobalAveragePooling2D()(x)
+
+    x = keras.layers.Dropout(0.3)(x)
+
+    outputs = keras.layers.Dense(10, activation="softmax")(x)
+
+
+
+    model = keras.Model(inputs, outputs)
+
+    return model, base
+
+
+
+
+
+def plot_history(hist_head, hist_fine, save_path):
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+
+
+    for hist, label, color in [
+
+        (hist_head, "阶段1-分类头", "b"),
+
+        (hist_fine, "阶段2-微调", "r"),
+
+    ]:
+
+        offset = len(axes[0].lines) // 2
+
+        epochs = range(offset + 1, offset + len(hist.history["accuracy"]) + 1)
+
+        axes[0].plot(epochs, hist.history["loss"], f"{color}-o", label=f"{label} loss")
+
+        axes[0].plot(
+
+            epochs, hist.history["val_loss"], f"{color}--o", label=f"{label} val_loss"
+
+        )
+
+        axes[1].plot(epochs, hist.history["accuracy"], f"{color}-o", label=f"{label} acc")
+
+        axes[1].plot(
+
+            epochs, hist.history["val_accuracy"], f"{color}--o", label=f"{label} val_acc"
+
+        )
+
+
+
+    axes[0].set_title("Loss")
+
+    axes[1].set_title("Accuracy")
+
+    for ax in axes:
+
+        ax.legend(fontsize=8)
+
+        ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    plt.savefig(save_path, dpi=150)
+
+    print(f"训练曲线已保存: {save_path}")
+
+    plt.show()
+
+
+
+
+
+def show_predictions(model, test_ds, save_path, n=9):
+
+    images, labels = [], []
+
+    for batch_x, batch_y in test_ds.take(1):
+
+        images, labels = batch_x.numpy(), batch_y.numpy()
+
+        break
+
+
+
+    preds = model.predict(images, verbose=0)
+
+    pred_labels = np.argmax(preds, axis=1)
+
+
+
+    fig, axes = plt.subplots(3, 3, figsize=(8, 8))
+
+    for ax, i in zip(axes.flat, range(n)):
+
+        # 反预处理以便显示
+
+        img = images[i]
+
+        img = (img - img.min()) / (img.max() - img.min() + 1e-7)
+
+        ax.imshow(img)
+
+        true_name = CLASS_NAMES[labels[i]]
+
+        pred_name = CLASS_NAMES[pred_labels[i]]
+
+        color = "green" if labels[i] == pred_labels[i] else "red"
+
+        ax.set_title(f"真:{true_name}\n预:{pred_name}", fontsize=9, color=color)
+
+        ax.axis("off")
+
+    fig.suptitle("CIFAR-10 迁移学习预测", fontsize=12)
+
+    plt.tight_layout()
+
+    plt.savefig(save_path, dpi=150)
+
+    print(f"预测样例已保存: {save_path}")
+
+    plt.show()
+
+
+
+
+
+def main():
+
+    train_ds, val_ds, test_ds = load_cifar10_datasets()
+
+    train_ds = train_ds.map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
+
+    val_ds = val_ds.map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
+
+    test_ds = test_ds.map(preprocess, num_parallel_calls=tf.data.AUTOTUNE)
+
+
+
+    # ── 阶段 1：冻结预训练 backbone，只训练新加的分类头 ──
+
+    print("=" * 50)
+
+    print("阶段 1：冻结 MobileNetV2，训练分类头")
+
+    print("=" * 50)
+
+    model, base = build_model(trainable_base=False)
+
+    model.compile(
+
+        optimizer=keras.optimizers.Adam(1e-3),
+
+        loss="sparse_categorical_crossentropy",
+
+        metrics=["accuracy"],
+
+    )
+
+    model.summary()
+
+
+
+    hist_head = model.fit(
+
+        train_ds, validation_data=val_ds, epochs=EPOCHS_HEAD, verbose=1
+
+    )
+
+
+
+    # ── 阶段 2：解冻 backbone 末尾若干层，低学习率微调 ──
+
+    print("\n" + "=" * 50)
+
+    print("阶段 2：解冻末尾 30 层，低学习率微调")
+
+    print("=" * 50)
+
+    base.trainable = True
+
+    for layer in base.layers[:-30]:
+
+        layer.trainable = False
+
+
+
+    model.compile(
+
+        optimizer=keras.optimizers.Adam(1e-5),
+
+        loss="sparse_categorical_crossentropy",
+
+        metrics=["accuracy"],
+
+    )
+
+    trainable = sum(int(tf.size(w)) for w in model.trainable_weights)
+
+    print(f"可训练参数: {trainable:,}")
+
+
+
+    hist_fine = model.fit(
+
+        train_ds, validation_data=val_ds, epochs=EPOCHS_FINE, verbose=1
+
+    )
+
+
+
+    test_loss, test_acc = model.evaluate(test_ds, verbose=0)
+
+    print(f"\n测试集准确率: {test_acc:.4f}")
+
+
+
+    model_path = os.path.join(BASE_DIR, "cifar10_mobilenet.keras")
+
+    model.save(model_path)
+
+    print(f"模型已保存: {model_path}")
+
+
+
+    plot_history(hist_head, hist_fine, os.path.join(PICTURES_DIR, "transfer_learning.png"))
+
+    show_predictions(model, test_ds, os.path.join(PICTURES_DIR, "transfer_predictions.png"))
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+
+
+
+============================================================
+FILE: test_usb_camera.py (6483 chars)
+============================================================
+"""
+
+USB 摄像头测试（香橙派 5 / Linux / Windows 通用）
+
+
+
+用法:
+
+  python test_usb_camera.py              # 自动扫描并测试
+
+  python test_usb_camera.py --device 0   # 指定设备号
+
+  python test_usb_camera.py --preview  # 预览 5 秒（需显示器或 VNC）
+
+  python test_usb_camera.py --list-only # 只列出设备
+
+
+
+香橙派上若打不开，先执行:
+
+  ls -l /dev/video*
+
+  groups $USER    # 确认在 video 组
+
+  sudo usermod -aG video $USER  # 若无权限，加入后重新登录
+
+"""
+
+import argparse
+
+import glob
+
+import os
+
+import re
+
+import sys
+
+import time
+
+
+
+# 香橙派/Linux：优先 V4L2，避免 GStreamer 扫 /dev/video1 等非采集节点时报错
+
+if sys.platform.startswith("linux"):
+
+    os.environ.setdefault("OPENCV_VIDEOIO_PRIORITY_LIST", "V4L2")
+
+
+
+import cv2
+
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+OUTPUT_DIR = os.path.join(BASE_DIR, "outputs")
+
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+
+
+
+def get_probe_indices(max_index=8):
+
+    """Linux 只探测存在的 /dev/videoN，减少无效警告"""
+
+    if sys.platform.startswith("linux"):
+
+        indices = []
+
+        for path in sorted(glob.glob("/dev/video*")):
+
+            m = re.search(r"video(\d+)$", path)
+
+            if m:
+
+                indices.append(int(m.group(1)))
+
+        return sorted(set(indices)) or list(range(max_index))
+
+    return list(range(max_index))
+
+
+
+
+
+def list_video_devices(max_index=8):
+
+    """尝试打开可用 index，返回可用设备列表"""
+
+    found = []
+
+    for i in get_probe_indices(max_index):
+
+        cap = open_camera(i)
+
+        if cap is not None and cap.isOpened():
+
+            ret, frame = cap.read()
+
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+            fps = cap.get(cv2.CAP_PROP_FPS)
+
+            backend = cap.getBackendName()
+
+            ok = ret and frame is not None
+
+            found.append({
+
+                "index": i,
+
+                "ok": ok,
+
+                "width": w,
+
+                "height": h,
+
+                "fps": fps,
+
+                "backend": backend,
+
+            })
+
+            cap.release()
+
+        elif cap is not None:
+
+            cap.release()
+
+    return found
+
+
+
+
+
+def open_camera(device, width=None, height=None):
+
+    """打开摄像头，Linux 上强制 V4L2"""
+
+    if sys.platform.startswith("linux"):
+
+        cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+
+    else:
+
+        cap = cv2.VideoCapture(device)
+
+
+
+    if not cap.isOpened():
+
+        return None
+
+
+
+    if width and height:
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+
+
+    return cap
+
+
+
+
+
+def test_capture(device, num_frames=10, save_path=None):
+
+    cap = open_camera(device)
+
+    if cap is None:
+
+        print(f"[失败] 无法打开设备 {device}")
+
+        return False
+
+
+
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    fps_reported = cap.get(cv2.CAP_PROP_FPS)
+
+    print(f"[打开] 设备 {device}: {w}x{h}, 报告 FPS={fps_reported}")
+
+
+
+    ok_count = 0
+
+    t0 = time.time()
+
+    last_frame = None
+
+
+
+    for i in range(num_frames):
+
+        ret, frame = cap.read()
+
+        if ret and frame is not None:
+
+            ok_count += 1
+
+            last_frame = frame
+
+        else:
+
+            print(f"  第 {i + 1} 帧读取失败")
+
+
+
+    elapsed = time.time() - t0
+
+    real_fps = ok_count / elapsed if elapsed > 0 else 0
+
+    print(f"[读帧] 成功 {ok_count}/{num_frames}, 耗时 {elapsed:.2f}s, 约 {real_fps:.1f} FPS")
+
+
+
+    if last_frame is not None and save_path:
+
+        cv2.imwrite(save_path, last_frame)
+
+        print(f"[保存] 测试图: {save_path}")
+
+
+
+    cap.release()
+
+    success = ok_count == num_frames
+
+    print("[通过]" if success else "[异常]", "摄像头采集" + ("正常" if success else "不稳定"))
+
+    return success
+
+
+
+
+
+def preview(device, seconds=5):
+
+    cap = open_camera(device)
+
+    if cap is None:
+
+        print(f"[失败] 无法打开设备 {device}")
+
+        return False
+
+
+
+    print(f"预览设备 {device}，{seconds} 秒后自动结束，按 q 提前退出")
+
+    end = time.time() + seconds
+
+    while time.time() < end:
+
+        ret, frame = cap.read()
+
+        if not ret:
+
+            print("读帧失败")
+
+            break
+
+        cv2.imshow("USB Camera Test", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+
+            break
+
+
+
+    cap.release()
+
+    cv2.destroyAllWindows()
+
+    return True
+
+
+
+
+
+def print_linux_tips():
+
+    if not sys.platform.startswith("linux"):
+
+        return
+
+    print("\n--- 香橙派 / Linux 排查提示 ---")
+
+    print("  查看设备:  ls -l /dev/video*")
+
+    print("  查看 USB:  lsusb")
+
+    print("  权限不足:  sudo usermod -aG video $USER  然后重新登录")
+
+    print("  占用检测:  fuser /dev/video0")
+
+    print("  OpenCV:    python -c \"import cv2; print(cv2.__version__)\"")
+
+
+
+
+
+def main():
+
+    parser = argparse.ArgumentParser(description="USB 摄像头测试")
+
+    parser.add_argument("--device", "-d", type=int, default=None, help="摄像头编号，默认自动选第一个可用")
+
+    parser.add_argument("--list-only", action="store_true", help="只扫描设备")
+
+    parser.add_argument("--preview", action="store_true", help="实时预览")
+
+    parser.add_argument("--seconds", type=int, default=5, help="预览秒数")
+
+    parser.add_argument("--frames", type=int, default=10, help="连续读帧测试数量")
+
+    parser.add_argument("--width", type=int, default=None, help="尝试设置宽度")
+
+    parser.add_argument("--height", type=int, default=None, help="尝试设置高度")
+
+    args = parser.parse_args()
+
+
+
+    print(f"平台: {sys.platform}")
+
+    print(f"OpenCV: {cv2.__version__}")
+
+    print(f"输出目录: {OUTPUT_DIR}\n")
+
+
+
+    devices = list_video_devices()
+
+    if not devices:
+
+        print("[失败] 未发现任何可用摄像头 (尝试了 index 0~7)")
+
+        print_linux_tips()
+
+        sys.exit(1)
+
+
+
+    print("扫描到的设备:")
+
+    for d in devices:
+
+        status = "可读帧" if d["ok"] else "打开但读帧失败"
+
+        print(
+
+            f"  /dev/video{d['index']} (index={d['index']}): "
+
+            f"{d['width']}x{d['height']} fps={d['fps']:.1f} "
+
+            f"backend={d['backend']} [{status}]"
+
+        )
+
+
+
+    if args.list_only:
+
+        print_linux_tips()
+
+        return
+
+
+
+    device = args.device
+
+    if device is None:
+
+        device = next((d["index"] for d in devices if d["ok"]), devices[0]["index"])
+
+        print(f"\n自动选用设备 index={device}")
+
+
+
+    if args.preview:
+
+        ok = preview(device, args.seconds)
+
+        sys.exit(0 if ok else 1)
+
+
+
+    save_path = os.path.join(OUTPUT_DIR, f"usb_camera_test_{device}.jpg")
+
+    if args.width and args.height:
+
+        cap = open_camera(device, args.width, args.height)
+
+        if cap:
+
+            cap.release()
+
+    ok = test_capture(device, args.frames, save_path)
+
+    print_linux_tips()
+
+    sys.exit(0 if ok else 1)
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+
+
+
+============================================================
+FILE: usb_camera.py (4405 chars)
+============================================================
+"""
+
+OpenCV 调用 USB 摄像头（香橙派 5 / Linux 优先 V4L2）
+
+
+
+用法:
+
+  python usb_camera.py                    # 预览，按 q 退出
+
+  python usb_camera.py --device 0         # 指定 /dev/video0
+
+  python usb_camera.py --width 640 --height 480
+
+  python usb_camera.py --snapshot out.jpg # 拍一张保存
+
+  python usb_camera.py --record out.mp4   # 录像，按 q 结束
+
+"""
+
+import argparse
+
+import os
+
+import sys
+
+import time
+
+
+
+if sys.platform.startswith("linux"):
+
+    os.environ.setdefault("OPENCV_VIDEOIO_PRIORITY_LIST", "V4L2")
+
+
+
+import cv2
+
+
+
+DEFAULT_DEVICE = 0
+
+DEFAULT_WIDTH = 640
+
+DEFAULT_HEIGHT = 480
+
+
+
+
+
+def open_usb_camera(device, width=None, height=None):
+
+    if sys.platform.startswith("linux"):
+
+        cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+
+    else:
+
+        cap = cv2.VideoCapture(device)
+
+
+
+    if not cap.isOpened():
+
+        return None
+
+
+
+    if width and height:
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+
+
+    return cap
+
+
+
+
+
+def print_camera_info(cap, device):
+
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+
+    print(f"设备 index={device}  分辨率={w}x{h}  FPS={fps:.1f}  后端={cap.getBackendName()}")
+
+
+
+
+
+def run_preview(cap, window_name="USB Camera"):
+
+    print("预览中，按 q 退出")
+
+    while True:
+
+        ret, frame = cap.read()
+
+        if not ret or frame is None:
+
+            print("读帧失败")
+
+            break
+
+        cv2.imshow(window_name, frame)
+
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+
+            break
+
+    cv2.destroyAllWindows()
+
+
+
+
+
+def run_snapshot(cap, path):
+
+    ret, frame = cap.read()
+
+    if not ret or frame is None:
+
+        print("拍照失败")
+
+        return False
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    cv2.imwrite(path, frame)
+
+    print(f"已保存: {path}")
+
+    return True
+
+
+
+
+
+def run_record(cap, path, device):
+
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+
+    if fps <= 0 or fps > 120:
+
+        fps = 25.0
+
+
+
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+    writer = cv2.VideoWriter(path, fourcc, fps, (w, h))
+
+    if not writer.isOpened():
+
+        print("无法创建视频文件，可尝试 .avi")
+
+        fourcc = cv2.VideoWriter_fourcc(*"XVID")
+
+        path = path.rsplit(".", 1)[0] + ".avi"
+
+        writer = cv2.VideoWriter(path, fourcc, fps, (w, h))
+
+
+
+    print(f"录像中 -> {path}，按 q 结束")
+
+    frames = 0
+
+    t0 = time.time()
+
+    while True:
+
+        ret, frame = cap.read()
+
+        if not ret or frame is None:
+
+            print("读帧失败，停止录像")
+
+            break
+
+        writer.write(frame)
+
+        frames += 1
+
+        cv2.imshow("USB Camera (recording)", frame)
+
+        if cv2.waitKey(1) & 0xFF == ord("q"):
+
+            break
+
+
+
+    writer.release()
+
+    cv2.destroyAllWindows()
+
+    elapsed = time.time() - t0
+
+    print(f"已保存 {frames} 帧, 时长 {elapsed:.1f}s, 约 {frames / elapsed:.1f} FPS")
+
+    return True
+
+
+
+
+
+def main():
+
+    parser = argparse.ArgumentParser(description="OpenCV USB 摄像头")
+
+    parser.add_argument("--device", "-d", type=int, default=DEFAULT_DEVICE)
+
+    parser.add_argument("--width", "-W", type=int, default=DEFAULT_WIDTH)
+
+    parser.add_argument("--height", "-H", type=int, default=DEFAULT_HEIGHT)
+
+    parser.add_argument("--snapshot", "-s", metavar="PATH", help="拍一张图并退出")
+
+    parser.add_argument("--record", "-r", metavar="PATH", help="录像保存路径")
+
+    parser.add_argument("--no-show", action="store_true", help="snapshot 时不弹窗")
+
+    args = parser.parse_args()
+
+
+
+    cap = open_usb_camera(args.device, args.width, args.height)
+
+    if cap is None:
+
+        print(f"无法打开摄像头 device={args.device}")
+
+        print("请检查: ls -l /dev/video*  权限: groups | grep video")
+
+        sys.exit(1)
+
+
+
+    print_camera_info(cap, args.device)
+
+
+
+    try:
+
+        if args.snapshot:
+
+            ok = run_snapshot(cap, args.snapshot)
+
+            sys.exit(0 if ok else 1)
+
+        if args.record:
+
+            ok = run_record(cap, args.record, args.device)
+
+            sys.exit(0 if ok else 1)
+
+        if args.no_show and not args.snapshot:
+
+            print("无显示模式请配合 --snapshot 或 --record")
+
+            sys.exit(1)
+
+        run_preview(cap)
+
+    finally:
+
+        cap.release()
+
+        cv2.destroyAllWindows()
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+
+
